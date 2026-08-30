@@ -73,6 +73,14 @@ The project aims to:
 
 ### VI. System Design
 
+![System Design](documents/system-design.png)
+
+The system design was implemented based on considerations on:
+
+- [Business Rules](documents/business-rules.md)
+- [Request Workflows](documents/request-workflows.md)
+- [Agent Responsibilities and Decision Flow](documents/agent-responsibilities-and-decision-flow.md)
+
 ### VII. Data Architecture
 
 ```mermaid
