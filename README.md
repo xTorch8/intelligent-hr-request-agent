@@ -134,7 +134,7 @@ erDiagram
         VARCHAR policy_name
         VARCHAR policy_type
         VARCHAR version
-        TEXT s3_key
+        TEXT blob_url
         DATE effective_date
         DATE expiration_date
         VARCHAR status
@@ -185,7 +185,7 @@ erDiagram
         DECIMAL claim_amount
         VARCHAR currency
         TEXT description
-        TEXT receipt_s3_key
+        TEXT blob_url
     }
 
     BENEFIT_CLAIMS {
@@ -197,7 +197,7 @@ erDiagram
         DECIMAL claim_amount
         VARCHAR currency
         TEXT description
-        TEXT document_s3_key
+        TEXT blob_url
     }
 
     AGENT_RUNS {
