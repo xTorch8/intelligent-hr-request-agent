@@ -68,7 +68,8 @@ class DocumentChunk(BaseModel):
     content: str
     raw_content: str
     metadata: ChunkMetadata
+    embedding: Optional[List[float]] = None
 #endregion
 
 class IngestDocumentRequest(BaseModel):
-    blob_name: str
+    policy_id: str

@@ -1,14 +1,13 @@
 from io import BytesIO
 import logging
 import re
-from typing import List, Optional, Tuple
-import uuid
-
-from langchain_text_splitters import RecursiveCharacterTextSplitter
 import pymupdf
+from typing import List, Optional, Tuple
 
 from ..clients.azure_blob_client import AzureBlobClient
+from ..clients.openai_client import OpenAIClient
 from ..configs.azure_blob_config import AzureBlobConfig
+from ..configs.openai_config import OpenAIConfig
 from ..models.ingestion_model import (
     ChunkMetadata,
     DocumentChunk,
@@ -20,26 +19,58 @@ from ..models.ingestion_model import (
     ParsedPage,
     TableElement
 )
+from ..repositories.ingestion_repository import IngestionRepository
 
 
 class IngestionService:
     def __init__(self):
         self._azure_blob_client = AzureBlobClient().get_client()
-        self._azure_blob_container_name = AzureBlobConfig.CONTAINER_NAME
+        self._openai_client = OpenAIClient().get_client()
+        self._ingestion_repository = IngestionRepository()
+        self._embedding_model = OpenAIConfig.EMBEDDING_MODEL
 
         self._chunk_size = 2000
         self._chunk_overlap = 200
 
     def ingest_document(self, request: IngestDocumentRequest) -> List[DocumentChunk]:
-        logging.info(f"[INFO][ingestion_service.py][ingest_document] Attempting to ingest document from blob: {request.blob_name}")
+        logging.info(f"[INFO][ingestion_service.py][ingest_document] Attempting to ingest document for policy_id: {request.policy_id}")
         try:
-            file = self._read_file_from_blob(request.blob_name)
-            parsed_document = self._parse_pdf(file, request.blob_name)
+            blob_url = self._ingestion_repository.get_blob_url_by_policy_id(request.policy_id)
+            if not blob_url:
+                raise ValueError(f"Policy with ID '{request.policy_id}' not found in database or has no blob_url.")
+
+            container_name = blob_url.split("/")[0] if "/" in blob_url else AzureBlobConfig.CONTAINER_NAME
+            blob_name = blob_url.split("/")[-1] if "/" in blob_url else blob_url
+
+            file = self._read_file_from_blob(container_name, blob_name)
+            parsed_document = self._parse_pdf(file, blob_name)
             chunks = self._create_chunks(parsed_document)
+            embedded_chunks = self._generate_embeddings(chunks)
+            self._ingestion_repository.save_policy_chunks(request.policy_id, embedded_chunks)
+            return embedded_chunks
+        except Exception as e:
+            logging.error(f"[ERROR][ingestion_service.py][ingest_document] Failed to ingest document for policy_id: {request.policy_id}. Error: {e}")
+            raise e
+
+    #region Embedding
+    def _generate_embeddings(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
+        logging.info(f"[INFO][ingestion_service.py][_generate_embeddings] Generating embeddings for {len(chunks)} chunks using {self._embedding_model}.")
+        if not chunks:
+            return chunks
+
+        texts = [chunk.content for chunk in chunks]
+        try:
+            response = self._openai_client.embeddings.create(
+                input = texts,
+                model = self._embedding_model
+            )
+            for i, data in enumerate(response.data):
+                chunks[i].embedding = data.embedding
             return chunks
         except Exception as e:
-            logging.error(f"[ERROR][ingestion_service.py][ingest_document] Failed to ingest document from blob: {request.blob_name}. Error: {e}")
+            logging.error(f"[ERROR][ingestion_service.py][_generate_embeddings] Failed to generate embeddings. Error: {e}")
             raise e
+    #endregion
 
     #region Chunking
     def _create_chunks(self, parsed_doc: ParsedDocument) -> List[DocumentChunk]:
@@ -71,6 +102,7 @@ class IngestionService:
                 if elem.type == ElementType.HEADING:
                     formatted_heading, is_major, section_name = self._format_heading_markdown(text_content)
 
+                    # If major top-level section changes and buffer has content, flush previous major section
                     if is_major and current_buffer and current_major_section != section_name:
                         chunk, current_buffer, current_buffer_length = self._flush_buffer(
                             buffer = current_buffer,
@@ -100,6 +132,7 @@ class IngestionService:
                     current_buffer.append(text_content)
                     current_buffer_length = current_buffer_length + len(text_content)
 
+                # Flush buffer if accumulated content exceeds target chunk size (~2000 chars)
                 if current_buffer_length >= self._chunk_size:
                     chunk, current_buffer, current_buffer_length = self._flush_buffer(
                         buffer = current_buffer,
@@ -115,6 +148,7 @@ class IngestionService:
                         chunk_index = chunk_index + 1
                     has_table = False
 
+        # Flush final remaining buffer
         if current_buffer:
             chunk, current_buffer, current_buffer_length = self._flush_buffer(
                 buffer = current_buffer,
@@ -135,7 +169,16 @@ class IngestionService:
 
         return chunks
 
-    def _flush_buffer(self, buffer: List[str], file_name: str, blob_name: str, page_number: int, section_title: str, chunk_index: int, has_table: bool = False) -> Tuple[Optional[DocumentChunk], List[str], int]:
+    def _flush_buffer(
+        self,
+        buffer: List[str],
+        file_name: str,
+        blob_name: str,
+        page_number: int,
+        section_title: str,
+        chunk_index: int,
+        has_table: bool = False
+    ) -> Tuple[Optional[DocumentChunk], List[str], int]:
         if not buffer:
             return None, [], 0
 
@@ -174,11 +217,13 @@ class IngestionService:
     def _format_heading_markdown(self, heading_text: str) -> Tuple[str, bool, str]:
         cleaned = heading_text.strip()
 
+        # Check for major numbered sections e.g. "1. Purpose", "4. Annual Leave", "5. Sick Leave"
         major_match = re.match(r"^(\d+)\.\s+(.+)$", cleaned)
         if major_match:
             formatted = f"# {cleaned}"
             return formatted, True, cleaned
 
+        # Check for subsections e.g. "4.1 Entitlement and Balance"
         sub_match = re.match(r"^(\d+\.\d+)\s+(.+)$", cleaned)
         if sub_match:
             formatted = f"## {cleaned}"
@@ -385,11 +430,11 @@ class IngestionService:
         return parsed_page
     #endregion
 
-    def _read_file_from_blob(self, blob_name: str) -> BytesIO:
+    def _read_file_from_blob(self, container_name, blob_name: str) -> BytesIO:
         logging.info(f"[INFO][ingestion_service.py][_read_file_from_blob] Attempting to read file from blob: {blob_name}")
         try:
             blob_client = self._azure_blob_client.get_blob_client(
-                container = self._azure_blob_container_name,
+                container = container_name,
                 blob = blob_name
             )
 
