@@ -8,6 +8,7 @@ from ..clients.azure_blob_client import AzureBlobClient
 from ..clients.openai_client import OpenAIClient
 from ..configs.azure_blob_config import AzureBlobConfig
 from ..configs.openai_config import OpenAIConfig
+from ..models.api_model import APIResponseModel
 from ..models.ingestion_model import (
     ChunkMetadata,
     DocumentChunk,
@@ -32,7 +33,7 @@ class IngestionService:
         self._chunk_size = 2000
         self._chunk_overlap = 200
 
-    def ingest_document(self, request: IngestDocumentRequest) -> List[DocumentChunk]:
+    def ingest_document(self, request: IngestDocumentRequest) -> APIResponseModel[None]:
         logging.info(f"[INFO][ingestion_service.py][ingest_document] Attempting to ingest document for policy_id: {request.policy_id}")
         try:
             blob_url = self._ingestion_repository.get_blob_url_by_policy_id(request.policy_id)
@@ -47,10 +48,16 @@ class IngestionService:
             chunks = self._create_chunks(parsed_document)
             embedded_chunks = self._generate_embeddings(chunks)
             self._ingestion_repository.save_policy_chunks(request.policy_id, embedded_chunks)
-            return embedded_chunks
+
+            return APIResponseModel(message = "Document ingested successfully")
         except Exception as e:
             logging.error(f"[ERROR][ingestion_service.py][ingest_document] Failed to ingest document for policy_id: {request.policy_id}. Error: {e}")
-            raise e
+            return APIResponseModel(
+                error = str(e),
+                is_success = False,
+                status_code = 500,
+                message = "Error ingesting document"
+            )
 
     #region Embedding
     def _generate_embeddings(self, chunks: List[DocumentChunk]) -> List[DocumentChunk]:
