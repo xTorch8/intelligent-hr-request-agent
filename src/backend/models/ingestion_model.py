@@ -2,7 +2,7 @@ from enum import Enum
 from pydantic import BaseModel
 from typing import List, Optional
 
-#region Document Parsing
+#region Document Parsing Models
 class ElementType(str, Enum):
     HEADING = "heading"
     PARAGRAPH = "paragraph"
@@ -49,6 +49,25 @@ class ParsedDocument(BaseModel):
 
     def __len__(self) -> int:
         return len(self.pages)
+#endregion
+
+#region Document Chunking Models
+class ChunkMetadata(BaseModel):
+    blob_name: str
+    file_name: str
+    page_number: int
+    section_title: Optional[str] = None
+    chunk_index: int
+    total_chunks: Optional[int] = None
+    char_count: int
+    token_estimate: int
+    has_table: bool = False
+
+class DocumentChunk(BaseModel):
+    chunk_id: str
+    content: str
+    raw_content: str
+    metadata: ChunkMetadata
 #endregion
 
 class IngestDocumentRequest(BaseModel):

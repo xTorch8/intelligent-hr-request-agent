@@ -1,6 +1,8 @@
 from io import BytesIO
 import logging
-from typing import List
+import re
+from typing import List, Optional, Tuple
+import uuid
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import pymupdf
@@ -8,6 +10,8 @@ import pymupdf
 from ..clients.azure_blob_client import AzureBlobClient
 from ..configs.azure_blob_config import AzureBlobConfig
 from ..models.ingestion_model import (
+    ChunkMetadata,
+    DocumentChunk,
     DocumentElement,
     DocumentMetadata,
     ElementType,
@@ -23,39 +27,174 @@ class IngestionService:
         self._azure_blob_client = AzureBlobClient().get_client()
         self._azure_blob_container_name = AzureBlobConfig.CONTAINER_NAME
 
-        self._chunk_size = 1000
+        self._chunk_size = 2000
         self._chunk_overlap = 200
 
-    def ingest_document(self, request: IngestDocumentRequest) -> ParsedDocument:
+    def ingest_document(self, request: IngestDocumentRequest) -> List[DocumentChunk]:
         logging.info(f"[INFO][ingestion_service.py][ingest_document] Attempting to ingest document from blob: {request.blob_name}")
         try:
             file = self._read_file_from_blob(request.blob_name)
             parsed_document = self._parse_pdf(file, request.blob_name)
-            return parsed_document
+            chunks = self._create_chunks(parsed_document)
+            return chunks
         except Exception as e:
             logging.error(f"[ERROR][ingestion_service.py][ingest_document] Failed to ingest document from blob: {request.blob_name}. Error: {e}")
             raise e
 
-    def _create_chunks(self, text: str) -> List[str]:
-        logging.info("[INFO][ingestion_service.py][_create_chunks] Attempting to create text chunks.")
-        try:
-            splitter = RecursiveCharacterTextSplitter(
-                chunk_size = self._chunk_size,
-                chunk_overlap = self._chunk_overlap,
-                separators = [
-                    "\n\n",
-                    "\n",
-                    ". ",
-                    " ",
-                    ""
-                ]
-            )
+    #region Chunking
+    def _create_chunks(self, parsed_doc: ParsedDocument) -> List[DocumentChunk]:
+        logging.info("[INFO][ingestion_service.py][_create_chunks] Creating section-grouped semantic chunks.")
+        chunks: List[DocumentChunk] = []
 
-            chunks = splitter.split_text(text)
-            return chunks
-        except Exception as e:
-            logging.error(f"[ERROR][ingestion_service.py][_create_chunks] Failed to create text chunks. Error: {e}")
-            raise e
+        blob_name = parsed_doc.metadata.blob_name
+        file_name = parsed_doc.metadata.file_name
+
+        current_major_section = "Overview"
+        active_section = "Overview"
+
+        current_buffer: List[str] = []
+        current_buffer_length = 0
+        current_page_number = 1
+        has_table = False
+        chunk_index = 0
+
+        for page in parsed_doc.pages:
+            current_page_number = page.page_number
+            for elem in page.elements:
+                text_content = elem.text.strip()
+                if not text_content:
+                    continue
+
+                if self._is_header_or_footer(text_content):
+                    continue
+
+                if elem.type == ElementType.HEADING:
+                    formatted_heading, is_major, section_name = self._format_heading_markdown(text_content)
+
+                    if is_major and current_buffer and current_major_section != section_name:
+                        chunk, current_buffer, current_buffer_length = self._flush_buffer(
+                            buffer = current_buffer,
+                            file_name = file_name,
+                            blob_name = blob_name,
+                            page_number = current_page_number,
+                            section_title = active_section,
+                            chunk_index = chunk_index,
+                            has_table = has_table
+                        )
+                        if chunk:
+                            chunks.append(chunk)
+                            chunk_index = chunk_index + 1
+                        has_table = False
+                        current_major_section = section_name
+
+                    active_section = section_name
+                    current_buffer.append(formatted_heading)
+                    current_buffer_length = current_buffer_length + len(formatted_heading)
+
+                elif elem.type == ElementType.TABLE:
+                    has_table = True
+                    current_buffer.append(text_content)
+                    current_buffer_length = current_buffer_length + len(text_content)
+
+                else:
+                    current_buffer.append(text_content)
+                    current_buffer_length = current_buffer_length + len(text_content)
+
+                if current_buffer_length >= self._chunk_size:
+                    chunk, current_buffer, current_buffer_length = self._flush_buffer(
+                        buffer = current_buffer,
+                        file_name = file_name,
+                        blob_name = blob_name,
+                        page_number = current_page_number,
+                        section_title = active_section,
+                        chunk_index = chunk_index,
+                        has_table = has_table
+                    )
+                    if chunk:
+                        chunks.append(chunk)
+                        chunk_index = chunk_index + 1
+                    has_table = False
+
+        if current_buffer:
+            chunk, current_buffer, current_buffer_length = self._flush_buffer(
+                buffer = current_buffer,
+                file_name = file_name,
+                blob_name = blob_name,
+                page_number = current_page_number,
+                section_title = active_section,
+                chunk_index = chunk_index,
+                has_table = has_table
+            )
+            if chunk:
+                chunks.append(chunk)
+                chunk_index = chunk_index + 1
+
+        total_count = len(chunks)
+        for chunk in chunks:
+            chunk.metadata.total_chunks = total_count
+
+        return chunks
+
+    def _flush_buffer(self, buffer: List[str], file_name: str, blob_name: str, page_number: int, section_title: str, chunk_index: int, has_table: bool = False) -> Tuple[Optional[DocumentChunk], List[str], int]:
+        if not buffer:
+            return None, [], 0
+
+        raw_text = "\n\n".join(buffer).strip()
+        if not raw_text:
+            return None, [], 0
+
+        prefix = f"[Document: {file_name} | Page: {page_number} | Section: {section_title}]"
+        contextualized_content = f"{prefix}\n\n{raw_text}"
+        token_est = len(contextualized_content) // 4
+
+        chunk_id = f"{file_name}_chunk_{chunk_index}"
+        metadata = ChunkMetadata(
+            blob_name = blob_name,
+            file_name = file_name,
+            page_number = page_number,
+            section_title = section_title,
+            chunk_index = chunk_index,
+            char_count = len(contextualized_content),
+            token_estimate = token_est,
+            has_table = has_table
+        )
+
+        chunk = DocumentChunk(
+            chunk_id = chunk_id,
+            content = contextualized_content,
+            raw_content = raw_text,
+            metadata = metadata
+        )
+
+        new_buffer: List[str] = []
+        new_buffer_length = 0
+
+        return chunk, new_buffer, new_buffer_length
+
+    def _format_heading_markdown(self, heading_text: str) -> Tuple[str, bool, str]:
+        cleaned = heading_text.strip()
+
+        major_match = re.match(r"^(\d+)\.\s+(.+)$", cleaned)
+        if major_match:
+            formatted = f"# {cleaned}"
+            return formatted, True, cleaned
+
+        sub_match = re.match(r"^(\d+\.\d+)\s+(.+)$", cleaned)
+        if sub_match:
+            formatted = f"## {cleaned}"
+            return formatted, False, cleaned
+
+        formatted = f"# {cleaned}"
+        return formatted, True, cleaned
+
+    def _is_header_or_footer(self, text: str) -> bool:
+        cleaned = text.strip()
+        if re.match(r"^POL-LEAVE-\d+\s*\|\s*Version\s*[\d\.]+\s*Page\s*\d+$", cleaned, re.IGNORECASE):
+            return True
+        if re.match(r"^Page\s*\d+$", cleaned, re.IGNORECASE):
+            return True
+        return False
+    #endregion
 
     #region Document Parsing
     def _parse_pdf(self, file: BytesIO, blob_name: str) -> ParsedDocument:
