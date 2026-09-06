@@ -1,4 +1,5 @@
 import logging
+from typing import AsyncGenerator
 
 from ..agents.agent import Agent
 from ..models.agent_model import AgentQueryRequest, AgentQueryResponse
@@ -26,3 +27,7 @@ class AgentService:
                 message = "Error executing agent query"
             )
 
+    async def stream_ask(self, request: AgentQueryRequest) -> AsyncGenerator[str, None]:
+        logging.info(f"[INFO][agent_service.py][stream_ask] Streaming agent response for query: '{request.query}'")
+        async for chunk in self._agent.stream_ask(request):
+            yield chunk

@@ -1,5 +1,6 @@
+import json
 import logging
-from typing import List, Optional
+from typing import AsyncGenerator, List, Optional
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_openai import ChatOpenAI
@@ -104,6 +105,90 @@ class Agent:
         except Exception as e:
             logging.error(f"[ERROR][agent.py][ask] Failed to process agent query. Error: {e}")
             raise e
+
+    async def stream_ask(self, request: AgentQueryRequest) -> AsyncGenerator[str, None]:
+        logging.info(f"[INFO][agent.py][stream_ask] Streaming query processing: '{request.query}'")
+        try:
+            model_name = self._route_model(request.query, request.chat_history)
+            yield f"data: {json.dumps({'event': 'metadata', 'model_used': model_name})}\n\n"
+
+            llm = ChatOpenAI(
+                model = model_name,
+                api_key = OpenAIConfig.API_KEY,
+                temperature = 0.0,
+                streaming = True
+            )
+            llm_with_tools = llm.bind_tools(self._tools)
+
+            history_messages = []
+            if request.chat_history:
+                for msg in request.chat_history:
+                    if msg.role == "user":
+                        history_messages.append(HumanMessage(content = msg.content))
+                    elif msg.role == "assistant":
+                        history_messages.append(AIMessage(content = msg.content))
+                    elif msg.role == "system":
+                        history_messages.append(SystemMessage(content = msg.content))
+
+            prompt_text = request.query
+            if request.policy_id:
+                prompt_text = f"{request.query} (Policy ID: {request.policy_id})"
+
+            messages = [SystemMessage(content = AGENT_SYSTEM_PROMPT)]
+            messages.extend(history_messages)
+            messages.append(HumanMessage(content = prompt_text))
+
+            response = llm_with_tools.invoke(messages)
+
+            updated_history: List[ChatMessage] = list(request.chat_history) if request.chat_history else []
+            updated_history.append(ChatMessage(role = "user", content = prompt_text))
+
+            if response.tool_calls:
+                messages.append(response)
+                for tool_call in response.tool_calls:
+                    tool_name = tool_call["name"]
+                    tool_args = tool_call["args"]
+                    call_id = tool_call["id"]
+
+                    yield f"data: {json.dumps({'event': 'tool_start', 'tool': tool_name, 'args': tool_args})}\n\n"
+
+                    if tool_name in self._tool_map:
+                        tool_func = self._tool_map[tool_name]
+                        tool_output = tool_func.invoke(tool_args)
+                        tool_output_str = str(tool_output)
+
+                        yield f"data: {json.dumps({'event': 'tool_end', 'tool': tool_name, 'result': tool_output_str})}\n\n"
+
+                        messages.append(
+                            ToolMessage(
+                                content = tool_output_str,
+                                tool_call_id = call_id,
+                                name = tool_name
+                            )
+                        )
+
+                accumulated_answer = ""
+                async for chunk in llm_with_tools.astream(messages):
+                    if chunk.content:
+                        token_str = str(chunk.content)
+                        accumulated_answer = accumulated_answer + token_str
+                        yield f"data: {json.dumps({'event': 'token', 'token': token_str})}\n\n"
+            else:
+                accumulated_answer = str(response.content)
+                yield f"data: {json.dumps({'event': 'token', 'token': accumulated_answer})}\n\n"
+
+            updated_history.append(ChatMessage(role = "assistant", content = accumulated_answer))
+
+            done_payload = AgentQueryResponse(
+                query = request.query,
+                answer = accumulated_answer,
+                model_used = model_name,
+                chat_history = updated_history
+            )
+            yield f"data: {json.dumps({'event': 'done', 'response': done_payload.model_dump()})}\n\n"
+        except Exception as e:
+            logging.error(f"[ERROR][agent.py][stream_ask] SSE stream failed. Error: {e}")
+            yield f"data: {json.dumps({'event': 'error', 'error': str(e)})}\n\n"
 
     def _route_model(self, query: str, chat_history: Optional[List[ChatMessage]] = None) -> str:
         logging.info("[INFO][agent.py][_route_model] Routing query with LLM (OPENAI_SMALL_MODEL) including recent chat history.")
