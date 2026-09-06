@@ -7,7 +7,11 @@ from ..models.employee_model import (
     HealthBenefitRequest,
     LeaveBalanceRequest
 )
-from ..models.request_model import ProcessBenefitClaimRequest, ProcessLeaveRequest
+from ..models.request_model import (
+    ProcessBenefitClaimRequest,
+    ProcessExpenseClaimRequest,
+    ProcessLeaveRequest
+)
 from ..services.employee_service import EmployeeService
 from ..services.request_service import RequestService
 
@@ -178,6 +182,59 @@ def submit_benefit_claim(
         f"- Status: {res.request_status}",
         f"- Recommendation: {res.recommendation} | Eligibility: {res.eligibility_result}",
         f"- Claim Amount: {res.currency} {res.claim_amount:,.2f} | Eligible Coverage: {res.currency} {res.eligible_amount:,.2f}",
+        f"- Reasoning: {res.reasoning_summary}",
+        f"- Rule Validation Details:"
+    ]
+    for r in res.rule_results:
+        status_symbol = "✓ PASSED" if r.passed else "✗ FAILED"
+        lines.append(f"  * [{status_symbol}] {r.rule_name}: {r.details}")
+
+    return "\n".join(lines)
+
+
+@tool("submit_expense_claim")
+def submit_expense_claim(
+    employee_number: str,
+    expense_category: str,
+    expense_date: str,
+    merchant: str,
+    claim_amount: float,
+    currency: str = "IDR",
+    description: Optional[str] = None,
+    blob_url: Optional[str] = None
+) -> str:
+    """
+    Use this tool to submit and evaluate an Expense/Reimbursement Claim for an employee against deterministic business rules (employee status, category support, maximum claim limit, reimbursement rate, duplicate claim protection, receipt requirement).
+    Date must be formatted as YYYY-MM-DD (e.g. '2026-08-20').
+    """
+    try:
+        parsed_expense_date = datetime.strptime(expense_date, "%Y-%m-%d").date()
+    except Exception as e:
+        return f"Invalid date format for expense_date. Must be YYYY-MM-DD. Error: {e}"
+
+    service = RequestService()
+    req = ProcessExpenseClaimRequest(
+        employee_number = employee_number,
+        expense_category = expense_category,
+        expense_date = parsed_expense_date,
+        merchant = merchant,
+        claim_amount = claim_amount,
+        currency = currency,
+        description = description,
+        blob_url = blob_url
+    )
+
+    response = service.process_expense_claim(req)
+    if not response.payload:
+        return f"Failed to process expense claim: {response.message or response.error}"
+
+    res = response.payload
+    lines = [
+        f"Expense Claim Submission & Evaluation Result:",
+        f"- Request Number: {res.request_number} (ID: {res.request_id})",
+        f"- Status: {res.request_status}",
+        f"- Recommendation: {res.recommendation} | Eligibility: {res.eligibility_result}",
+        f"- Claim Amount: {res.currency} {res.claim_amount:,.2f} | Eligible Amount: {res.currency} {res.eligible_amount:,.2f}",
         f"- Reasoning: {res.reasoning_summary}",
         f"- Rule Validation Details:"
     ]

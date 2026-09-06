@@ -23,6 +23,17 @@ class ProcessBenefitClaimRequest(BaseModel):
     blob_url: Optional[str] = Field(default = None, description = "Medical document receipt blob URL")
 
 
+class ProcessExpenseClaimRequest(BaseModel):
+    employee_number: str = Field(..., description = "Employee Number e.g. EMP-0001")
+    expense_category: str = Field(..., description = "Category e.g. TRAVEL, MEALS, SUPPLIES, INTERNET")
+    expense_date: date = Field(..., description = "Expense transaction date (YYYY-MM-DD)")
+    merchant: str = Field(..., description = "Merchant name e.g. Airline, Hotel, Restaurant")
+    claim_amount: float = Field(..., description = "Claimed expense amount")
+    currency: str = Field(default = "IDR", description = "Currency code e.g. IDR, USD")
+    description: Optional[str] = Field(default = None, description = "Business justification or notes")
+    blob_url: Optional[str] = Field(default = None, description = "Receipt blob URL")
+
+
 class RuleCheckResult(BaseModel):
     rule_name: str
     passed: bool
@@ -53,6 +64,25 @@ class BenefitClaimDecisionResponse(BaseModel):
     benefit_type: str
     service_date: date
     provider_name: str
+    claim_amount: float
+    eligible_amount: float
+    currency: str
+    request_status: str = Field(..., description = "SUBMITTED, APPROVED, REJECTED, PENDING_REVIEW")
+    recommendation: str = Field(..., description = "APPROVE, REJECT, REVIEW")
+    eligibility_result: str = Field(..., description = "ELIGIBLE, NOT_ELIGIBLE, PARTIALLY_ELIGIBLE, REQUIRES_REVIEW")
+    rule_results: List[RuleCheckResult] = Field(default_factory = list)
+    reasoning_summary: str
+    agent_run_id: str
+    submitted_at: datetime
+
+
+class ExpenseClaimDecisionResponse(BaseModel):
+    request_id: str
+    request_number: str
+    employee_number: str
+    expense_category: str
+    expense_date: date
+    merchant: str
     claim_amount: float
     eligible_amount: float
     currency: str

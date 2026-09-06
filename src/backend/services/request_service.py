@@ -5,8 +5,10 @@ from typing import List, Optional
 from ..models.api_model import APIResponseModel
 from ..models.request_model import (
     BenefitClaimDecisionResponse,
+    ExpenseClaimDecisionResponse,
     LeaveRequestDecisionResponse,
     ProcessBenefitClaimRequest,
+    ProcessExpenseClaimRequest,
     ProcessLeaveRequest,
     RuleCheckResult
 )
@@ -256,5 +258,138 @@ class RequestService:
                 error = str(e),
                 status_code = 500,
                 message = f"Failed to process benefit claim: {str(e)}",
+                payload = None
+            )
+
+    def process_expense_claim(self, request_data: ProcessExpenseClaimRequest) -> APIResponseModel[Optional[ExpenseClaimDecisionResponse]]:
+        logging.info(f"[INFO][request_service.py][process_expense_claim] Processing expense claim for employee_number: {request_data.employee_number}")
+        try:
+            profile = self._employee_repository.get_employee_profile(request_data.employee_number)
+            if not profile:
+                return APIResponseModel[Optional[ExpenseClaimDecisionResponse]](
+                    is_success = False,
+                    error = f"Employee '{request_data.employee_number}' not found.",
+                    status_code = 404,
+                    message = f"Employee '{request_data.employee_number}' not found.",
+                    payload = None
+                )
+
+            rule_results: List[RuleCheckResult] = []
+
+            is_active = profile.employment_status.upper() == "ACTIVE"
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.A Employee Eligibility",
+                    passed = is_active,
+                    details = f"Employee status is '{profile.employment_status}'. Must be 'ACTIVE'."
+                )
+            )
+
+            allowed_categories = ["TRAVEL", "MEALS", "SUPPLIES", "INTERNET", "TRANSPORT", "TRAINING"]
+            is_allowed_category = request_data.expense_category.upper() in allowed_categories
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.B Supported Category",
+                    passed = is_allowed_category,
+                    details = f"Expense Category '{request_data.expense_category}' is supported." if is_allowed_category else f"Expense Category '{request_data.expense_category}' is not in allowed categories: {allowed_categories}."
+                )
+            )
+
+            category_limits = {
+                "TRAVEL": 15000000.0,
+                "MEALS": 1000000.0,
+                "SUPPLIES": 5000000.0,
+                "INTERNET": 1000000.0,
+                "TRANSPORT": 2000000.0,
+                "TRAINING": 10000000.0
+            }
+            category_limit = category_limits.get(request_data.expense_category.upper(), 5000000.0)
+            within_limit = request_data.claim_amount <= category_limit
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.C Maximum Claim Limit",
+                    passed = within_limit,
+                    details = f"Claim Amount ({request_data.claim_amount}) <= Category Limit ({category_limit})."
+                )
+            )
+
+            reimbursement_rates = {
+                "TRAVEL": 1.0,
+                "MEALS": 0.8,
+                "SUPPLIES": 1.0,
+                "INTERNET": 1.0,
+                "TRANSPORT": 1.0,
+                "TRAINING": 1.0
+            }
+            rate = reimbursement_rates.get(request_data.expense_category.upper(), 1.0)
+            eligible_amount = round(request_data.claim_amount * rate, 2)
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.D Reimbursement Percentage",
+                    passed = True,
+                    details = f"Claim Amount ({request_data.claim_amount}) * Rate ({rate * 100}%) = Eligible Amount ({eligible_amount})."
+                )
+            )
+
+            is_duplicate = self._request_repository.check_duplicate_expense_claim(
+                employee_id = profile.employee_id,
+                expense_date = request_data.expense_date,
+                claim_amount = request_data.claim_amount,
+                expense_category = request_data.expense_category
+            )
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.E Duplicate Claim Check",
+                    passed = not is_duplicate,
+                    details = "Duplicate claim detected for same date, amount, and category." if is_duplicate else "No duplicate claim detected."
+                )
+            )
+
+            has_receipt = bool(request_data.blob_url and request_data.blob_url.strip())
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "II.F Required Documentation",
+                    passed = has_receipt,
+                    details = "Receipt document blob URL exists." if has_receipt else "Required receipt documentation is missing."
+                )
+            )
+
+            all_passed = all(r.passed for r in rule_results)
+            if all_passed:
+                recommendation = "APPROVE"
+                eligibility_result = "ELIGIBLE"
+                status = "PENDING_REVIEW"
+                reasoning = "All expense claim eligibility rules passed. Recommendation: APPROVE."
+            else:
+                recommendation = "REJECT"
+                eligibility_result = "NOT_ELIGIBLE"
+                status = "REJECTED"
+                failed_rules = [r.rule_name for r in rule_results if not r.passed]
+                reasoning = f"Expense claim failed deterministic rules: {', '.join(failed_rules)}. Recommendation: REJECT."
+
+            decision = self._request_repository.create_and_evaluate_expense_claim(
+                request_data = request_data,
+                employee_id = profile.employee_id,
+                eligible_amount = eligible_amount,
+                recommendation = recommendation,
+                eligibility_result = eligibility_result,
+                rule_results = rule_results,
+                reasoning_summary = reasoning,
+                status = status
+            )
+
+            return APIResponseModel[Optional[ExpenseClaimDecisionResponse]](
+                is_success = True,
+                status_code = 200,
+                message = "Expense claim processed and evaluated successfully",
+                payload = decision
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_service.py][process_expense_claim] Failed processing expense claim. Error: {e}")
+            return APIResponseModel[Optional[ExpenseClaimDecisionResponse]](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to process expense claim: {str(e)}",
                 payload = None
             )

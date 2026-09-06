@@ -12,6 +12,7 @@ from ..tools.employee_tools import (
     get_health_benefit,
     get_leave_balance,
     submit_benefit_claim,
+    submit_expense_claim,
     submit_leave_request
 )
 from ..tools.policy_retrieval_tool import search_hr_policies
@@ -25,7 +26,8 @@ class Agent:
             get_leave_balance,
             get_health_benefit,
             submit_leave_request,
-            submit_benefit_claim
+            submit_benefit_claim,
+            submit_expense_claim
         ]
         self._tool_map = {t.name: t for t in self._tools}
 

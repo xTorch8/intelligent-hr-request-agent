@@ -1,7 +1,11 @@
 from datetime import date
 import logging
 from src.backend.models.agent_model import AgentQueryRequest
-from src.backend.models.request_model import ProcessBenefitClaimRequest, ProcessLeaveRequest
+from src.backend.models.request_model import (
+    ProcessBenefitClaimRequest,
+    ProcessExpenseClaimRequest,
+    ProcessLeaveRequest
+)
 from src.backend.services.agent_service import AgentService
 from src.backend.services.request_service import RequestService
 
@@ -58,6 +62,30 @@ def test_request_service_direct():
             symbol = "✓" if r.passed else "✗"
             print(f"  [{symbol}] {r.rule_name}: {r.details}")
 
+    req_expense = ProcessExpenseClaimRequest(
+        employee_number = "EMP-0001",
+        expense_category = "TRAVEL",
+        expense_date = date(2026, 8, 20),
+        merchant = "Garuda Indonesia",
+        claim_amount = 2500000.0,
+        currency = "IDR",
+        description = "Business flight ticket for client meeting",
+        blob_url = "expenses/flight_garuda_emp0001.pdf"
+    )
+
+    res_expense = service.process_expense_claim(req_expense)
+    print(f"\n3. Expense Claim Result:")
+    print(f"Is Success: {res_expense.is_success}")
+    if res_expense.payload:
+        res_e = res_expense.payload
+        print(f"Request Number: {res_e.request_number}")
+        print(f"Status: {res_e.request_status} | Recommendation: {res_e.recommendation} | Eligibility: {res_e.eligibility_result}")
+        print(f"Claim Amount: {res_e.currency} {res_e.claim_amount:,.2f} | Eligible Amount: {res_e.currency} {res_e.eligible_amount:,.2f}")
+        print(f"Reasoning: {res_e.reasoning_summary}")
+        for r in res_e.rule_results:
+            symbol = "✓" if r.passed else "✗"
+            print(f"  [{symbol}] {r.rule_name}: {r.details}")
+
 
 def test_agent_request_tools():
     print("\n==================================================")
@@ -68,7 +96,8 @@ def test_agent_request_tools():
     
     queries = [
         "I am employee EMP-0001. I want to request annual leave from 2026-10-01 to 2026-10-05 (5 days) for annual family vacation. Can you evaluate and submit this leave request for me?",
-        "I am employee EMP-0001. I spent IDR 1,500,000 at Siloam Hospital on 2026-08-15 for HEALTH consultation. The receipt blob URL is claims/receipt_siloam_emp0001.pdf. Please evaluate and submit my health claim."
+        "I am employee EMP-0001. I spent IDR 1,500,000 at Siloam Hospital on 2026-08-15 for HEALTH consultation. The receipt blob URL is claims/receipt_siloam_emp0001.pdf. Please evaluate and submit my health claim.",
+        "I am employee EMP-0001. I paid IDR 2,500,000 to Garuda Indonesia on 2026-08-20 for TRAVEL. The receipt URL is expenses/flight_garuda_emp0001.pdf. Can you submit my expense reimbursement claim?"
     ]
     
     for query in queries:
