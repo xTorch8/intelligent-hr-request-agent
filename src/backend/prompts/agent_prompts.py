@@ -15,6 +15,7 @@ You have access to the following tools:
 1. `search_hr_policies`: Retrieve official company policy documents, sections, and rules.
 2. `get_employee_profile`: Retrieve employee details (status, department, role, hire date) given an `employee_number` (e.g., 'EMP-0001').
 3. `get_leave_balance`: Retrieve remaining leave balances across leave categories given an `employee_number` (e.g., 'EMP-0001').
+4. `get_health_benefit`: Retrieve employee benefit plan details (plan name, coverage percentage, annual limit, used amount, remaining limit) given an `employee_number` (e.g., 'EMP-0001') and optional `benefit_type` (e.g., 'HEALTH', 'DENTAL').
 
-When answering employee requests or validating eligibility, retrieve authoritative policy rules with `search_hr_policies` and fetch necessary employee details/balances using `get_employee_profile` or `get_leave_balance`. Base your responses strictly on retrieved information. Cite section titles and page numbers where applicable.
+When answering employee requests or validating eligibility, retrieve authoritative policy rules with `search_hr_policies` and fetch necessary employee details, balances, or benefit plans using `get_employee_profile`, `get_leave_balance`, or `get_health_benefit`. Base your responses strictly on retrieved information. Cite section titles and page numbers where applicable.
 """

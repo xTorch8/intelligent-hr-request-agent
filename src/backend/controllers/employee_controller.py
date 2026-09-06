@@ -5,6 +5,8 @@ from ..models.api_model import APIResponseModel
 from ..models.employee_model import (
     EmployeeProfileRequest,
     EmployeeProfileResponse,
+    HealthBenefitRequest,
+    HealthBenefitResponse,
     LeaveBalanceRequest,
     LeaveBalanceResponse
 )
@@ -26,3 +28,8 @@ async def get_employee_profile(request: EmployeeProfileRequest = Depends()):
 @router.get("/leave-balance", response_model = APIResponseModel[Optional[LeaveBalanceResponse]])
 async def get_leave_balance(request: LeaveBalanceRequest = Depends()):
     return employee_service.get_leave_balance(request)
+
+
+@router.get("/health-benefit", response_model = APIResponseModel[Optional[HealthBenefitResponse]])
+async def get_health_benefit(request: HealthBenefitRequest = Depends()):
+    return employee_service.get_health_benefit(request)

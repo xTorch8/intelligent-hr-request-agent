@@ -1,6 +1,10 @@
 import logging
 from src.backend.models.agent_model import AgentQueryRequest
-from src.backend.models.employee_model import EmployeeProfileRequest, LeaveBalanceRequest
+from src.backend.models.employee_model import (
+    EmployeeProfileRequest,
+    HealthBenefitRequest,
+    LeaveBalanceRequest
+)
 from src.backend.services.agent_service import AgentService
 from src.backend.services.employee_service import EmployeeService
 
@@ -34,6 +38,17 @@ def test_employee_service_postgres():
         for b in res_balance.payload.balances:
             print(f"  [{b.leave_type}] Total: {b.total_days}, Used: {b.used_days}, Remaining: {b.remaining_days}")
 
+    # 3. Get health benefit for EMP-0001
+    benefit_req = HealthBenefitRequest(employee_number = "EMP-0001")
+    res_benefit = service.get_health_benefit(benefit_req)
+    print("\n3. get_health_benefit(HealthBenefitRequest(employee_number='EMP-0001')):")
+    print(f"Is Success: {res_benefit.is_success}")
+    print(f"Status Code: {res_benefit.status_code}")
+    print(f"Message: {res_benefit.message}")
+    if res_benefit.payload:
+        for item in res_benefit.payload.benefits:
+            print(f"  [{item.benefit_type}] {item.plan_name} - Coverage: {item.coverage_percentage}%, Limit: {item.annual_limit}, Used: {item.used_amount}, Remaining: {item.remaining_limit}")
+
 
 def test_agent_employee_postgres_tools():
     print("\n==================================================")
@@ -41,16 +56,20 @@ def test_agent_employee_postgres_tools():
     print("==================================================")
     
     agent_service = AgentService()
-    request = AgentQueryRequest(
-        query = "What is the remaining annual leave balance for employee EMP-0001?"
-    )
     
-    response = agent_service.ask(request)
-    print(f"Is Success: {response.is_success}")
-    if response.payload:
-        print(f"\nQuery: {response.payload.query}")
-        print(f"Model Used: {response.payload.model_used}")
-        print(f"Answer:\n{response.payload.answer}")
+    queries = [
+        "What is the remaining annual leave balance for employee EMP-0001?",
+        "Can you check the health benefit plans and remaining limits for employee EMP-0001?"
+    ]
+    
+    for q in queries:
+        print(f"\n💬 User Query: '{q}'")
+        request = AgentQueryRequest(query = q)
+        response = agent_service.ask(request)
+        print(f"Is Success: {response.is_success}")
+        if response.payload:
+            print(f"Model Used: {response.payload.model_used}")
+            print(f"Answer:\n{response.payload.answer}\n")
 
 
 if __name__ == "__main__":

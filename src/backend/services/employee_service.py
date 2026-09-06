@@ -5,6 +5,8 @@ from ..models.api_model import APIResponseModel
 from ..models.employee_model import (
     EmployeeProfileRequest,
     EmployeeProfileResponse,
+    HealthBenefitRequest,
+    HealthBenefitResponse,
     LeaveBalanceRequest,
     LeaveBalanceResponse
 )
@@ -69,5 +71,33 @@ class EmployeeService:
                 error = str(e),
                 status_code = 500,
                 message = f"Failed to fetch leave balance: {str(e)}",
+                payload = None
+            )
+
+    def get_health_benefit(self, request: HealthBenefitRequest) -> APIResponseModel[Optional[HealthBenefitResponse]]:
+        logging.info(f"[INFO][employee_service.py][get_health_benefit] Fetching health benefits for employee_number: {request.employee_number}")
+        try:
+            benefit = self._repository.get_health_benefit(request.employee_number, benefit_type = request.benefit_type)
+            if not benefit:
+                return APIResponseModel[Optional[HealthBenefitResponse]](
+                    is_success = False,
+                    error = f"Health benefits for employee_number '{request.employee_number}' not found.",
+                    status_code = 404,
+                    message = f"Health benefits for employee_number '{request.employee_number}' not found.",
+                    payload = None
+                )
+            return APIResponseModel[Optional[HealthBenefitResponse]](
+                is_success = True,
+                status_code = 200,
+                message = f"Health benefits for employee_number '{request.employee_number}' retrieved successfully.",
+                payload = benefit
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][employee_service.py][get_health_benefit] Error: {e}")
+            return APIResponseModel[Optional[HealthBenefitResponse]](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to fetch health benefits: {str(e)}",
                 payload = None
             )
