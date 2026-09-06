@@ -6,7 +6,9 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 from langchain_openai import ChatOpenAI
 
 from ..configs.openai_config import OpenAIConfig
+from ..guardrails.prompt_guardrail import PromptGuardrail
 from ..models.agent_model import AgentQueryRequest, AgentQueryResponse, ChatMessage
+from ..models.guardrail_model import GuardrailRequest
 from ..prompts.agent_prompts import AGENT_SYSTEM_PROMPT, ROUTER_SYSTEM_PROMPT
 from ..tools.employee_tools import (
     get_employee_profile,
@@ -21,6 +23,7 @@ from ..tools.policy_retrieval_tool import search_hr_policies
 
 class Agent:
     def __init__(self):
+        self._prompt_guardrail = PromptGuardrail()
         self._tools = [
             search_hr_policies,
             get_employee_profile,
@@ -35,6 +38,20 @@ class Agent:
     def ask(self, request: AgentQueryRequest) -> AgentQueryResponse:
         logging.info(f"[INFO][agent.py][ask] Processing query: '{request.query}'")
         try:
+            guardrail_result = self._prompt_guardrail.validate(GuardrailRequest(input = request.query))
+            if not guardrail_result.is_safe:
+                logging.warning(f"[WARNING][agent.py][ask] Prompt guardrail blocked query: '{request.query}'. Reason: {guardrail_result.error}")
+                updated_history: List[ChatMessage] = list(request.chat_history) if request.chat_history else []
+                updated_history.append(ChatMessage(role = "user", content = request.query))
+                refusal_text = f"I cannot fulfill this request. Guardrail safety check failed: {guardrail_result.error}"
+                updated_history.append(ChatMessage(role = "assistant", content = refusal_text))
+                return AgentQueryResponse(
+                    query = request.query,
+                    answer = refusal_text,
+                    model_used = "guardrail_blocked",
+                    chat_history = updated_history
+                )
+
             model_name = self._route_model(request.query, request.chat_history)
             logging.info(f"[INFO][agent.py][ask] LLM Model Router selected tier: {model_name}")
 
@@ -109,6 +126,24 @@ class Agent:
     async def stream_ask(self, request: AgentQueryRequest) -> AsyncGenerator[str, None]:
         logging.info(f"[INFO][agent.py][stream_ask] Streaming query processing: '{request.query}'")
         try:
+            guardrail_result = self._prompt_guardrail.validate(GuardrailRequest(input = request.query))
+            if not guardrail_result.is_safe:
+                logging.warning(f"[WARNING][agent.py][stream_ask] Prompt guardrail blocked query: '{request.query}'. Reason: {guardrail_result.error}")
+                refusal_text = f"I cannot fulfill this request. Guardrail safety check failed: {guardrail_result.error}"
+                yield f"data: {json.dumps({'event': 'metadata', 'model_used': 'guardrail_blocked'})}\n\n"
+                yield f"data: {json.dumps({'event': 'token', 'token': refusal_text})}\n\n"
+                updated_history: List[ChatMessage] = list(request.chat_history) if request.chat_history else []
+                updated_history.append(ChatMessage(role = "user", content = request.query))
+                updated_history.append(ChatMessage(role = "assistant", content = refusal_text))
+                done_payload = AgentQueryResponse(
+                    query = request.query,
+                    answer = refusal_text,
+                    model_used = "guardrail_blocked",
+                    chat_history = updated_history
+                )
+                yield f"data: {json.dumps({'event': 'done', 'response': done_payload.model_dump()})}\n\n"
+                return
+
             model_name = self._route_model(request.query, request.chat_history)
             yield f"data: {json.dumps({'event': 'metadata', 'model_used': model_name})}\n\n"
 
