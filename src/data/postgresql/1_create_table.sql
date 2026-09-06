@@ -49,6 +49,26 @@ CREATE TABLE employees (
         )
 );
 
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+
+    employee_id UUID UNIQUE REFERENCES employees(id) ON DELETE CASCADE,
+    email VARCHAR(255) NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    role VARCHAR(50) NOT NULL,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT chk_users_role
+        CHECK (
+            role IN (
+                'EMPLOYEE',
+                'HR_ADMIN'
+            )
+        )
+);
+
 CREATE TABLE leave_balances (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 

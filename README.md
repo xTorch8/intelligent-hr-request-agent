@@ -239,7 +239,18 @@ erDiagram
     }
 
 
+    USERS {
+        UUID id PK
+        UUID employee_id FK,UK
+        VARCHAR email UK
+        VARCHAR password_hash
+        VARCHAR role
+        TIMESTAMP created_at
+        TIMESTAMP updated_at
+    }
+
     %% Employee relationships
+    EMPLOYEES ||--o| USERS : has
     EMPLOYEES ||--o{ LEAVE_BALANCES : has
     EMPLOYEES ||--o{ EMPLOYEE_BENEFITS : enrolled_in
     EMPLOYEES ||--o{ REQUESTS : submits

@@ -10,6 +10,7 @@ from src.backend.models.request_model import (
 )
 from src.backend.repositories.employee_repository import EmployeeRepository
 from src.backend.services.request_service import RequestService
+from src.backend.utils.auth_utils import create_access_token
 
 client = TestClient(app)
 
@@ -21,6 +22,16 @@ def test_hr_request_workflow():
 
     service = RequestService()
     emp_repo = EmployeeRepository()
+
+    hr_token_payload = {
+        "sub": "20000000-0000-0000-0000-000000000004",
+        "employee_id": "10000000-0000-0000-0000-000000000004",
+        "employee_number": "EMP-0004",
+        "email": "rina.wijaya@company.com",
+        "role": "HR_ADMIN"
+    }
+    hr_token = create_access_token(hr_token_payload)
+    headers = {"Authorization": f"Bearer {hr_token}"}
 
     init_bal = emp_repo.get_leave_balance("EMP-0001", year = 2026)
     init_used = 0.0
@@ -44,13 +55,13 @@ def test_hr_request_workflow():
     target_request_id = leave_resp.payload.request_id
     print(f"Created Test Request ID: {target_request_id}")
 
-    list_resp = client.get("/api/request/list")
+    list_resp = client.get("/api/request/list", headers = headers)
     assert list_resp.status_code == 200
     list_json = list_resp.json()
     assert list_json["is_success"] is True
     print(f"1. GET /api/request/list total count: {list_json['payload']['total_count']}")
 
-    list_filtered = client.get("/api/request/list?status=PENDING_REVIEW&employee_number=EMP-0001")
+    list_filtered = client.get("/api/request/list?status=PENDING_REVIEW&employee_number=EMP-0001", headers = headers)
     assert list_filtered.status_code == 200
     filtered_json = list_filtered.json()
     assert filtered_json["is_success"] is True
@@ -61,7 +72,7 @@ def test_hr_request_workflow():
         "actor_id": None,
         "reason": "HR Admin approval test"
     }
-    accept_resp = client.post("/api/request/accept", json = accept_body)
+    accept_resp = client.post("/api/request/accept", json = accept_body, headers = headers)
     assert accept_resp.status_code == 200
     accept_json = accept_resp.json()
     assert accept_json["is_success"] is True
@@ -82,7 +93,7 @@ def test_hr_request_workflow():
         "actor_id": None,
         "reason": "HR Admin rejection test"
     }
-    reject_resp = client.post("/api/request/reject", json = reject_body)
+    reject_resp = client.post("/api/request/reject", json = reject_body, headers = headers)
     assert reject_resp.status_code == 200
     reject_json = reject_resp.json()
     assert reject_json["is_success"] is True
@@ -101,4 +112,3 @@ def test_hr_request_workflow():
 
 if __name__ == "__main__":
     test_hr_request_workflow()
-
