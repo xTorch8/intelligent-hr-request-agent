@@ -16,11 +16,11 @@ def search_hr_policies(query: str, policy_id: Optional[str] = None) -> str:
     )
 
     response = retrieval_service.retrieve(request)
-    if not response.results:
+    if not response.payload or not response.payload.results:
         return "No relevant HR policy sections found for the query."
 
     formatted_chunks = []
-    for i, res in enumerate(response.results, start = 1):
+    for i, res in enumerate(response.payload.results, start = 1):
         section = res.metadata.section_title if res.metadata else "N/A"
         page = res.metadata.page_number if res.metadata else "N/A"
         formatted_chunks.append(

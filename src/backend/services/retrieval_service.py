@@ -5,13 +5,13 @@ from typing import Dict, List, Optional
 from ..clients.openai_client import OpenAIClient
 from ..configs.openai_config import OpenAIConfig
 from ..configs.retrieval_config import RetrievalConfig
+from ..models.api_model import APIResponseModel
 from ..models.retrieval_model import (
     SearchQueryRequest,
     SearchQueryResponse,
     SearchResultChunk
 )
 from ..repositories.retrieval_repository import RetrievalRepository
-
 
 class RetrievalService:
     def __init__(self):
@@ -21,7 +21,7 @@ class RetrievalService:
         self._top_k = RetrievalConfig.TOP_K
         self._fetch_k = RetrievalConfig.FETCH_K
 
-    def retrieve(self, request: SearchQueryRequest) -> SearchQueryResponse:
+    def retrieve(self, request: SearchQueryRequest) -> APIResponseModel[Optional[SearchQueryResponse]]:
         logging.info(f"[INFO][retrieval_service.py][retrieve] Executing hybrid retrieval for query: '{request.query}'")
         try:
             query_embedding = self._embed_query(request.query)
@@ -43,14 +43,25 @@ class RetrievalService:
 
             final_results = reranked_results[:self._top_k]
 
-            response = SearchQueryResponse(
+            response_data = SearchQueryResponse(
                 query = request.query,
                 results = final_results
             )
-            return response
+            return APIResponseModel[Optional[SearchQueryResponse]](
+                is_success = True,
+                status_code = 200,
+                message = "Hybrid retrieval executed successfully",
+                payload = response_data
+            )
         except Exception as e:
             logging.error(f"[ERROR][retrieval_service.py][retrieve] Failed hybrid retrieval. Error: {e}")
-            raise e
+            return APIResponseModel[Optional[SearchQueryResponse]](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed hybrid retrieval: {str(e)}",
+                payload = None
+            )
 
     def _embed_query(self, query: str) -> List[float]:
         logging.info(f"[INFO][retrieval_service.py][_embed_query] Generating embedding for query using {self._embedding_model}.")
@@ -119,4 +130,3 @@ class RetrievalService:
 
         candidates.sort(key = lambda x: x.rerank_score, reverse = True)
         return candidates
-
