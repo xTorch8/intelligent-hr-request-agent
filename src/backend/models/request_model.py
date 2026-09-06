@@ -34,6 +34,18 @@ class ProcessExpenseClaimRequest(BaseModel):
     blob_url: Optional[str] = Field(default = None, description = "Receipt blob URL")
 
 
+class GetRequestListFilterRequest(BaseModel):
+    request_type: Optional[str] = Field(default = None, description = "Optional filter: LEAVE, EXPENSE, BENEFIT")
+    status: Optional[str] = Field(default = None, description = "Optional filter: SUBMITTED, PROCESSING, PENDING_REVIEW, APPROVED, REJECTED, COMPLETED, CANCELLED")
+    employee_number: Optional[str] = Field(default = None, description = "Optional filter by employee_number e.g. EMP-0001")
+
+
+class UpdateRequestStatusRequest(BaseModel):
+    request_id: str = Field(..., description = "Request UUID")
+    actor_id: Optional[str] = Field(default = None, description = "HR Admin employee UUID")
+    reason: Optional[str] = Field(default = None, description = "Reason for decision")
+
+
 class RuleCheckResult(BaseModel):
     rule_name: str
     passed: bool
@@ -93,3 +105,26 @@ class ExpenseClaimDecisionResponse(BaseModel):
     reasoning_summary: str
     agent_run_id: str
     submitted_at: datetime
+
+
+class RequestSummaryItem(BaseModel):
+    request_id: str
+    request_number: str
+    employee_id: str
+    employee_number: str
+    employee_name: str
+    department: str
+    request_type: str
+    status: str
+    title: str
+    description: Optional[str] = None
+    recommendation: Optional[str] = None
+    eligibility_result: Optional[str] = None
+    reasoning_summary: Optional[str] = None
+    submitted_at: datetime
+    updated_at: datetime
+
+
+class RequestListResponse(BaseModel):
+    total_count: int
+    requests: List[RequestSummaryItem]

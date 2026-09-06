@@ -8,13 +8,16 @@ from ..clients.postgres_client import PostgresClient
 from ..models.request_model import (
     BenefitClaimDecisionResponse,
     ExpenseClaimDecisionResponse,
+    GetRequestListFilterRequest,
     LeaveRequestDecisionResponse,
     ProcessBenefitClaimRequest,
     ProcessExpenseClaimRequest,
     ProcessLeaveRequest,
-    RuleCheckResult
+    RequestListResponse,
+    RequestSummaryItem,
+    RuleCheckResult,
+    UpdateRequestStatusRequest
 )
-
 
 class RequestRepository:
     def __init__(self):
@@ -373,6 +376,202 @@ class RequestRepository:
         except Exception as e:
             conn.rollback()
             logging.error(f"[ERROR][request_repository.py][create_and_evaluate_expense_claim] Failed transaction. Error: {e}")
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+
+    def get_requests(self, filter_req: GetRequestListFilterRequest) -> RequestListResponse:
+        logging.info(f"[INFO][request_repository.py][get_requests] Querying request list with filters: {filter_req}")
+        conn = self._postgres_client.get_connection()
+        cursor = conn.cursor()
+
+        query = """
+            SELECT r.id, r.request_number, r.employee_id, e.employee_number,
+                   e.first_name || ' ' || e.last_name AS employee_name, e.department,
+                   r.request_type, r.status, r.title, r.description,
+                   rd.recommendation, rd.eligibility_result, rd.reasoning_summary,
+                   r.submitted_at, r.updated_at
+            FROM requests r
+            JOIN employees e ON r.employee_id = e.id
+            LEFT JOIN request_decisions rd ON rd.request_id = r.id
+            WHERE (%s::text IS NULL OR r.request_type = %s::text)
+              AND (%s::text IS NULL OR r.status = %s::text)
+              AND (%s::text IS NULL OR e.employee_number = %s::text)
+            ORDER BY r.submitted_at DESC;
+        """
+
+        try:
+            cursor.execute(
+                query,
+                (
+                    filter_req.request_type, filter_req.request_type,
+                    filter_req.status, filter_req.status,
+                    filter_req.employee_number, filter_req.employee_number
+                )
+            )
+            rows = cursor.fetchall()
+            items: List[RequestSummaryItem] = []
+
+            for row in rows:
+                req_id, req_num, emp_id, emp_num, emp_name, dept, req_type, st, title, desc, rec, elig, reason, sub_at, up_at = row
+                items.append(
+                    RequestSummaryItem(
+                        request_id = str(req_id),
+                        request_number = req_num,
+                        employee_id = str(emp_id),
+                        employee_number = emp_num,
+                        employee_name = emp_name,
+                        department = dept,
+                        request_type = req_type,
+                        status = st,
+                        title = title,
+                        description = desc,
+                        recommendation = rec,
+                        eligibility_result = elig,
+                        reasoning_summary = reason,
+                        submitted_at = sub_at,
+                        updated_at = up_at
+                    )
+                )
+
+            return RequestListResponse(
+                total_count = len(items),
+                requests = items
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_repository.py][get_requests] Failed query. Error: {e}")
+            raise e
+        finally:
+            cursor.close()
+            conn.close()
+
+    def update_request_status(
+        self,
+        request_id: str,
+        new_status: str,
+        actor_id: Optional[str] = None,
+        reason: Optional[str] = None
+    ) -> bool:
+        logging.info(f"[INFO][request_repository.py][update_request_status] Updating request {request_id} status to {new_status}")
+        conn = self._postgres_client.get_connection()
+        cursor = conn.cursor()
+
+        try:
+            select_sql = "SELECT status, employee_id, request_type FROM requests WHERE id = %s::uuid;"
+            cursor.execute(select_sql, (request_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+
+            prev_status, employee_id, request_type = row
+
+            update_sql = """
+                UPDATE requests
+                SET status = %s,
+                    completed_at = CASE WHEN %s IN ('APPROVED', 'REJECTED', 'COMPLETED', 'CANCELLED') THEN CURRENT_TIMESTAMP ELSE completed_at END
+                WHERE id = %s::uuid;
+            """
+            cursor.execute(update_sql, (new_status, new_status, request_id))
+
+            if prev_status != "APPROVED" and new_status == "APPROVED":
+                if request_type == "LEAVE":
+                    leave_sql = """
+                        SELECT leave_type, requested_days, start_date
+                        FROM leave_requests
+                        WHERE request_id = %s::uuid;
+                    """
+                    cursor.execute(leave_sql, (request_id,))
+                    l_row = cursor.fetchone()
+                    if l_row:
+                        leave_type, req_days, start_date = l_row
+                        req_year = start_date.year
+                        update_lb_sql = """
+                            UPDATE leave_balances
+                            SET used_days = used_days + %s,
+                                remaining_days = GREATEST(0, remaining_days - %s)
+                            WHERE employee_id = %s::uuid
+                              AND UPPER(leave_type) = UPPER(%s)
+                              AND year = %s;
+                        """
+                        cursor.execute(update_lb_sql, (req_days, req_days, employee_id, leave_type, req_year))
+                elif request_type == "BENEFIT":
+                    benefit_sql = """
+                        SELECT bc.benefit_type, COALESCE(rd.eligible_amount, bc.claim_amount)
+                        FROM benefit_claims bc
+                        LEFT JOIN request_decisions rd ON rd.request_id = bc.request_id
+                        WHERE bc.request_id = %s::uuid;
+                    """
+                    cursor.execute(benefit_sql, (request_id,))
+                    b_row = cursor.fetchone()
+                    if b_row:
+                        b_type, el_amt = b_row
+                        update_eb_sql = """
+                            UPDATE employee_benefits
+                            SET used_amount = used_amount + %s
+                            WHERE employee_id = %s::uuid
+                              AND UPPER(benefit_type) = UPPER(%s)
+                              AND status = 'ACTIVE';
+                        """
+                        cursor.execute(update_eb_sql, (el_amt, employee_id, b_type))
+            elif prev_status == "APPROVED" and new_status in ("REJECTED", "CANCELLED"):
+                if request_type == "LEAVE":
+                    leave_sql = """
+                        SELECT leave_type, requested_days, start_date
+                        FROM leave_requests
+                        WHERE request_id = %s::uuid;
+                    """
+                    cursor.execute(leave_sql, (request_id,))
+                    l_row = cursor.fetchone()
+                    if l_row:
+                        leave_type, req_days, start_date = l_row
+                        req_year = start_date.year
+                        update_lb_sql = """
+                            UPDATE leave_balances
+                            SET used_days = GREATEST(0, used_days - %s),
+                                remaining_days = remaining_days + %s
+                            WHERE employee_id = %s::uuid
+                              AND UPPER(leave_type) = UPPER(%s)
+                              AND year = %s;
+                        """
+                        cursor.execute(update_lb_sql, (req_days, req_days, employee_id, leave_type, req_year))
+                elif request_type == "BENEFIT":
+                    benefit_sql = """
+                        SELECT bc.benefit_type, COALESCE(rd.eligible_amount, bc.claim_amount)
+                        FROM benefit_claims bc
+                        LEFT JOIN request_decisions rd ON rd.request_id = bc.request_id
+                        WHERE bc.request_id = %s::uuid;
+                    """
+                    cursor.execute(benefit_sql, (request_id,))
+                    b_row = cursor.fetchone()
+                    if b_row:
+                        b_type, el_amt = b_row
+                        update_eb_sql = """
+                            UPDATE employee_benefits
+                            SET used_amount = GREATEST(0, used_amount - %s)
+                            WHERE employee_id = %s::uuid
+                              AND UPPER(benefit_type) = UPPER(%s)
+                              AND status = 'ACTIVE';
+                        """
+                        cursor.execute(update_eb_sql, (el_amt, employee_id, b_type))
+
+            audit_meta = json.dumps({"reason": reason or f"HR decision: {new_status}"})
+            insert_audit_sql = """
+                INSERT INTO audit_logs (request_id, actor_type, actor_id, action, previous_status, new_status, metadata)
+                VALUES (%s::uuid, 'HR_ADMIN', %s::uuid, %s, %s, %s, %s::jsonb);
+            """
+            actor_uuid = actor_id if actor_id else None
+            action_name = f"HR_{new_status}_REQUEST"
+            cursor.execute(
+                insert_audit_sql,
+                (request_id, actor_uuid, action_name, prev_status, new_status, audit_meta)
+            )
+
+            conn.commit()
+            return True
+        except Exception as e:
+            conn.rollback()
+            logging.error(f"[ERROR][request_repository.py][update_request_status] Update failed. Error: {e}")
             raise e
         finally:
             cursor.close()

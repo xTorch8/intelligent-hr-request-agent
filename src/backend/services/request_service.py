@@ -6,11 +6,14 @@ from ..models.api_model import APIResponseModel
 from ..models.request_model import (
     BenefitClaimDecisionResponse,
     ExpenseClaimDecisionResponse,
+    GetRequestListFilterRequest,
     LeaveRequestDecisionResponse,
     ProcessBenefitClaimRequest,
     ProcessExpenseClaimRequest,
     ProcessLeaveRequest,
-    RuleCheckResult
+    RequestListResponse,
+    RuleCheckResult,
+    UpdateRequestStatusRequest
 )
 from ..repositories.employee_repository import EmployeeRepository
 from ..repositories.request_repository import RequestRepository
@@ -392,4 +395,58 @@ class RequestService:
                 status_code = 500,
                 message = f"Failed to process expense claim: {str(e)}",
                 payload = None
+            )
+
+    def get_requests(self, filter_req: GetRequestListFilterRequest) -> APIResponseModel[Optional[RequestListResponse]]:
+        logging.info(f"[INFO][request_service.py][get_requests] Querying request list with filter: {filter_req}")
+        try:
+            result = self._request_repository.get_requests(filter_req)
+            return APIResponseModel[Optional[RequestListResponse]](
+                is_success = True,
+                status_code = 200,
+                message = "Request list retrieved successfully",
+                payload = result
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_service.py][get_requests] Failed to fetch request list. Error: {e}")
+            return APIResponseModel[Optional[RequestListResponse]](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to fetch request list: {str(e)}",
+                payload = None
+            )
+
+    def update_request_status(self, update_req: UpdateRequestStatusRequest, new_status: str) -> APIResponseModel[bool]:
+        logging.info(f"[INFO][request_service.py][update_request_status] Updating request_id {update_req.request_id} to {new_status}")
+        try:
+            success = self._request_repository.update_request_status(
+                request_id = update_req.request_id,
+                new_status = new_status,
+                actor_id = update_req.actor_id,
+                reason = update_req.reason
+            )
+            if not success:
+                return APIResponseModel[bool](
+                    is_success = False,
+                    error = f"Request with ID '{update_req.request_id}' not found.",
+                    status_code = 404,
+                    message = f"Request with ID '{update_req.request_id}' not found.",
+                    payload = False
+                )
+
+            return APIResponseModel[bool](
+                is_success = True,
+                status_code = 200,
+                message = f"Request status updated to {new_status} successfully",
+                payload = True
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_service.py][update_request_status] Failed to update request status. Error: {e}")
+            return APIResponseModel[bool](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to update request status: {str(e)}",
+                payload = False
             )
