@@ -7,12 +7,14 @@ from langchain_openai import ChatOpenAI
 from ..configs.openai_config import OpenAIConfig
 from ..models.agent_model import AgentQueryRequest, AgentQueryResponse, ChatMessage
 from ..prompts.agent_prompts import AGENT_SYSTEM_PROMPT, ROUTER_SYSTEM_PROMPT
+from ..tools.employee_tools import get_employee_profile, get_leave_balance
 from ..tools.policy_retrieval_tool import search_hr_policies
 
 
 class Agent:
     def __init__(self):
-        self._tools = [search_hr_policies]
+        self._tools = [search_hr_policies, get_employee_profile, get_leave_balance]
+        self._tool_map = {t.name: t for t in self._tools}
 
     def ask(self, request: AgentQueryRequest) -> AgentQueryResponse:
         logging.info(f"[INFO][agent.py][ask] Processing query: '{request.query}'")
@@ -57,8 +59,9 @@ class Agent:
                     tool_args = tool_call["args"]
                     call_id = tool_call["id"]
 
-                    if tool_name == "search_hr_policies":
-                        tool_output = search_hr_policies.invoke(tool_args)
+                    if tool_name in self._tool_map:
+                        tool_func = self._tool_map[tool_name]
+                        tool_output = tool_func.invoke(tool_args)
                         tool_output_str = str(tool_output)
 
                         messages.append(
