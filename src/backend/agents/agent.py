@@ -7,13 +7,13 @@ from langchain_openai import ChatOpenAI
 from ..configs.openai_config import OpenAIConfig
 from ..models.agent_model import AgentQueryRequest, AgentQueryResponse, ChatMessage
 from ..prompts.agent_prompts import AGENT_SYSTEM_PROMPT, ROUTER_SYSTEM_PROMPT
-from ..tools.employee_tools import get_employee_profile, get_health_benefit, get_leave_balance
+from ..tools.employee_tools import get_employee_profile, get_health_benefit, get_leave_balance, submit_leave_request
 from ..tools.policy_retrieval_tool import search_hr_policies
 
 
 class Agent:
     def __init__(self):
-        self._tools = [search_hr_policies, get_employee_profile, get_leave_balance, get_health_benefit]
+        self._tools = [search_hr_policies, get_employee_profile, get_leave_balance, get_health_benefit, submit_leave_request]
         self._tool_map = {t.name: t for t in self._tools}
 
     def ask(self, request: AgentQueryRequest) -> AgentQueryResponse:
