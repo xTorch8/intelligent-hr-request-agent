@@ -3,7 +3,13 @@ import logging
 from typing import List, Optional
 
 from ..models.api_model import APIResponseModel
-from ..models.request_model import LeaveRequestDecisionResponse, ProcessLeaveRequest, RuleCheckResult
+from ..models.request_model import (
+    BenefitClaimDecisionResponse,
+    LeaveRequestDecisionResponse,
+    ProcessBenefitClaimRequest,
+    ProcessLeaveRequest,
+    RuleCheckResult
+)
 from ..repositories.employee_repository import EmployeeRepository
 from ..repositories.request_repository import RequestRepository
 
@@ -80,7 +86,7 @@ class RequestService:
                 )
             )
 
-            has_overlap = self._request_repository._check_overlapping_leave(
+            has_overlap = self._request_repository.check_overlapping_leave(
                 employee_id = profile.employee_id,
                 start_date = request_data.start_date,
                 end_date = request_data.end_date
@@ -132,3 +138,123 @@ class RequestService:
                 payload = None
             )
 
+    def process_benefit_claim(self, request_data: ProcessBenefitClaimRequest) -> APIResponseModel[Optional[BenefitClaimDecisionResponse]]:
+        logging.info(f"[INFO][request_service.py][process_benefit_claim] Processing benefit claim for employee_number: {request_data.employee_number}")
+        try:
+            profile = self._employee_repository.get_employee_profile(request_data.employee_number)
+            if not profile:
+                return APIResponseModel[Optional[BenefitClaimDecisionResponse]](
+                    is_success = False,
+                    error = f"Employee '{request_data.employee_number}' not found.",
+                    status_code = 404,
+                    message = f"Employee '{request_data.employee_number}' not found.",
+                    payload = None
+                )
+
+            benefit_resp = self._employee_repository.get_health_benefit(
+                employee_number = request_data.employee_number,
+                benefit_type = request_data.benefit_type
+            )
+
+            target_benefit = None
+            if benefit_resp and benefit_resp.benefits:
+                target_benefit = benefit_resp.benefits[0]
+
+            rule_results: List[RuleCheckResult] = []
+
+            is_active = profile.employment_status.upper() == "ACTIVE"
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.A Employee Eligibility",
+                    passed = is_active,
+                    details = f"Employee status is '{profile.employment_status}'. Must be 'ACTIVE'."
+                )
+            )
+
+            has_plan = target_benefit is not None and target_benefit.status.upper() == "ACTIVE"
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.B Benefit Plan Eligibility",
+                    passed = has_plan,
+                    details = f"Active '{request_data.benefit_type}' benefit plan found." if has_plan else f"No active '{request_data.benefit_type}' benefit plan found for employee."
+                )
+            )
+
+            coverage_percentage = (target_benefit.coverage_percentage / 100.0) if (target_benefit and target_benefit.coverage_percentage is not None) else 1.0
+            eligible_amount = round(request_data.claim_amount * coverage_percentage, 2)
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.C Coverage Percentage Calculation",
+                    passed = True,
+                    details = f"Claim Amount ({request_data.claim_amount}) * Coverage ({coverage_percentage * 100}%) = Eligible Amount ({eligible_amount})."
+                )
+            )
+
+            remaining_limit = target_benefit.remaining_limit if (target_benefit and target_benefit.remaining_limit is not None) else float("inf")
+            within_annual_limit = eligible_amount <= remaining_limit
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.D Annual Limit Check",
+                    passed = within_annual_limit,
+                    details = f"Eligible Amount ({eligible_amount}) <= Remaining Limit ({remaining_limit})."
+                )
+            )
+
+            effective_date = target_benefit.effective_date if target_benefit else request_data.service_date
+            waiting_period_valid = request_data.service_date >= effective_date
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.E Waiting Period Check",
+                    passed = waiting_period_valid,
+                    details = f"Service Date ({request_data.service_date}) >= Benefit Effective Date ({effective_date})."
+                )
+            )
+
+            has_documentation = bool(request_data.blob_url and request_data.blob_url.strip())
+            rule_results.append(
+                RuleCheckResult(
+                    rule_name = "III.F Required Documentation",
+                    passed = has_documentation,
+                    details = "Medical receipt document blob URL exists." if has_documentation else "Required medical documentation receipt is missing."
+                )
+            )
+
+            all_passed = all(r.passed for r in rule_results)
+            if all_passed:
+                recommendation = "APPROVE"
+                eligibility_result = "ELIGIBLE"
+                status = "PENDING_REVIEW"
+                reasoning = "All health benefit claim eligibility rules passed. Recommendation: APPROVE."
+            else:
+                recommendation = "REJECT"
+                eligibility_result = "NOT_ELIGIBLE"
+                status = "REJECTED"
+                failed_rules = [r.rule_name for r in rule_results if not r.passed]
+                reasoning = f"Benefit claim failed deterministic rules: {', '.join(failed_rules)}. Recommendation: REJECT."
+
+            decision = self._request_repository.create_and_evaluate_benefit_claim(
+                request_data = request_data,
+                employee_id = profile.employee_id,
+                eligible_amount = eligible_amount,
+                recommendation = recommendation,
+                eligibility_result = eligibility_result,
+                rule_results = rule_results,
+                reasoning_summary = reasoning,
+                status = status
+            )
+
+            return APIResponseModel[Optional[BenefitClaimDecisionResponse]](
+                is_success = True,
+                status_code = 200,
+                message = "Health/Benefit claim processed and evaluated successfully",
+                payload = decision
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_service.py][process_benefit_claim] Failed processing benefit claim. Error: {e}")
+            return APIResponseModel[Optional[BenefitClaimDecisionResponse]](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to process benefit claim: {str(e)}",
+                payload = None
+            )
