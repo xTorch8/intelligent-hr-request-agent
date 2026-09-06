@@ -9,7 +9,7 @@ class IngestionRepository:
         self._postgres_client = PostgresClient()
 
     def get_blob_url_by_policy_id(self, policy_id: str) -> Optional[str]:
-        logging.info(f"[INFO][policy_repository.py][get_blob_url_by_policy_id] Fetching blob_url for policy_id: {policy_id}")
+        logging.info(f"[INFO][ingestion_repository.py][get_blob_url_by_policy_id] Fetching blob_url for policy_id: {policy_id}")
         conn = self._postgres_client.get_connection()
         cursor = conn.cursor()
 
@@ -22,14 +22,14 @@ class IngestionRepository:
                 return blob_url
             return None
         except Exception as e:
-            logging.error(f"[ERROR][policy_repository.py][get_blob_url_by_policy_id] Failed to fetch blob_url for policy_id: {policy_id}. Error: {e}")
+            logging.error(f"[ERROR][ingestion_repository.py][get_blob_url_by_policy_id] Failed to fetch blob_url for policy_id: {policy_id}. Error: {e}")
             raise e
         finally:
             cursor.close()
             conn.close()
 
     def save_policy_chunks(self, policy_id: str, chunks: List[DocumentChunk]) -> None:
-        logging.info(f"[INFO][policy_repository.py][save_policy_chunks] Saving {len(chunks)} chunks for policy_id: {policy_id}")
+        logging.info(f"[INFO][ingestion_repository.py][save_policy_chunks] Saving {len(chunks)} chunks for policy_id: {policy_id}")
         if not chunks:
             return
 
@@ -61,10 +61,10 @@ class IngestionRepository:
                     )
                 )
             conn.commit()
-            logging.info(f"[INFO][policy_repository.py][save_policy_chunks] Successfully saved {len(chunks)} chunk embeddings in database.")
+            logging.info(f"[INFO][ingestion_repository.py][save_policy_chunks] Successfully saved {len(chunks)} chunk embeddings in database.")
         except Exception as e:
             conn.rollback()
-            logging.error(f"[ERROR][policy_repository.py][save_policy_chunks] Failed to save chunks in database. Error: {e}")
+            logging.error(f"[ERROR][ingestion_repository.py][save_policy_chunks] Failed to save chunks in database. Error: {e}")
             raise e
         finally:
             cursor.close()
