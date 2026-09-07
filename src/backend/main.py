@@ -1,4 +1,5 @@
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from .configs import logging_config
 from .controllers.agent_controller import router as agent_router
@@ -9,6 +10,14 @@ from .controllers.request_controller import router as request_router
 from .controllers.retrieval_controller import router as retrieval_router
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 app.include_router(auth_router)
 app.include_router(ingestion_router)
