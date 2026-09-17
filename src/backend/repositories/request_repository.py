@@ -386,35 +386,65 @@ class RequestRepository:
         conn = self._postgres_client.get_connection()
         cursor = conn.cursor()
 
+        page = filter_req.page if (filter_req.page and filter_req.page > 0) else 1
+        page_size = filter_req.page_size if (filter_req.page_size and filter_req.page_size > 0) else 10
+        offset = (page - 1) * page_size
+
+        count_query = """
+            SELECT COUNT(r.id)
+            FROM requests r
+            JOIN employees e ON r.employee_id = e.id
+            WHERE (%s::text IS NULL OR r.request_type = %s::text)
+              AND (%s::text IS NULL OR r.status = %s::text)
+              AND (%s::text IS NULL OR e.employee_number = %s::text);
+        """
+
         query = """
             SELECT r.id, r.request_number, r.employee_id, e.employee_number,
                    e.first_name || ' ' || e.last_name AS employee_name, e.department,
                    r.request_type, r.status, r.title, r.description,
+                   COALESCE(ec.blob_url, bc.blob_url) AS blob_url,
                    rd.recommendation, rd.eligibility_result, rd.reasoning_summary,
+                   (SELECT al.metadata ->> 'reason' FROM audit_logs al WHERE al.request_id = r.id AND al.metadata ->> 'reason' IS NOT NULL ORDER BY al.created_at DESC LIMIT 1) AS decision_reason,
                    r.submitted_at, r.updated_at
             FROM requests r
             JOIN employees e ON r.employee_id = e.id
             LEFT JOIN request_decisions rd ON rd.request_id = r.id
+            LEFT JOIN expense_claims ec ON ec.request_id = r.id
+            LEFT JOIN benefit_claims bc ON bc.request_id = r.id
             WHERE (%s::text IS NULL OR r.request_type = %s::text)
               AND (%s::text IS NULL OR r.status = %s::text)
               AND (%s::text IS NULL OR e.employee_number = %s::text)
-            ORDER BY r.submitted_at DESC;
+            ORDER BY r.submitted_at DESC
+            LIMIT %s OFFSET %s;
         """
 
         try:
             cursor.execute(
-                query,
+                count_query,
                 (
                     filter_req.request_type, filter_req.request_type,
                     filter_req.status, filter_req.status,
                     filter_req.employee_number, filter_req.employee_number
                 )
             )
+            total_count = cursor.fetchone()[0]
+            total_pages = max(1, (total_count + page_size - 1) // page_size)
+
+            cursor.execute(
+                query,
+                (
+                    filter_req.request_type, filter_req.request_type,
+                    filter_req.status, filter_req.status,
+                    filter_req.employee_number, filter_req.employee_number,
+                    page_size, offset
+                )
+            )
             rows = cursor.fetchall()
             items: List[RequestSummaryItem] = []
 
             for row in rows:
-                req_id, req_num, emp_id, emp_num, emp_name, dept, req_type, st, title, desc, rec, elig, reason, sub_at, up_at = row
+                req_id, req_num, emp_id, emp_num, emp_name, dept, req_type, st, title, desc, blob_url, rec, elig, reason_sum, dec_reason, sub_at, up_at = row
                 items.append(
                     RequestSummaryItem(
                         request_id = str(req_id),
@@ -427,16 +457,21 @@ class RequestRepository:
                         status = st,
                         title = title,
                         description = desc,
+                        blob_url = blob_url,
                         recommendation = rec,
                         eligibility_result = elig,
-                        reasoning_summary = reason,
+                        reasoning_summary = reason_sum,
+                        decision_reason = dec_reason or reason_sum,
                         submitted_at = sub_at,
                         updated_at = up_at
                     )
                 )
 
             return RequestListResponse(
-                total_count = len(items),
+                total_count = total_count,
+                page = page,
+                page_size = page_size,
+                total_pages = total_pages,
                 requests = items
             )
         except Exception as e:

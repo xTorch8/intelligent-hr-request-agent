@@ -1,18 +1,34 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ChatMessage, ToolStep } from "../types/agent";
-import { streamChatApi } from "../services/api";
+import { streamChatApi, uploadFileApi } from "../services/api";
 import { useAuth } from "../context/AuthContext";
 
 export const ChatbotPage: React.FC = () => {
 	const { user } = useAuth();
-	const [messages, setMessages] = useState<ChatMessage[]>([
-		{
-			role: "assistant",
-			content: `Hello ${user?.first_name || "Employee"}! 👋 I am your Intelligent HR Assistant. I can help answer HR policy questions, check your leave balances, calculate reimbursement amounts, or submit leave & claim requests. How can I assist you today?`,
-		},
-	]);
+	const [messages, setMessages] = useState<ChatMessage[]>([]);
+
+	useEffect(() => {
+		const firstName = user?.first_name || "Employee";
+		const greeting = `Hello ${firstName}! 👋 I am your Intelligent HR Assistant. I can help answer HR policy questions, check your leave balances, calculate reimbursement amounts, or submit leave & claim requests. How can I assist you today?`;
+
+		setMessages((prev) => {
+			if (prev.length === 0) {
+				return [{ role: "assistant", content: greeting }];
+			}
+			if (prev.length === 1 && prev[0].role === "assistant" && prev[0].content.startsWith("Hello ")) {
+				return [{ role: "assistant", content: greeting }];
+			}
+			return prev;
+		});
+	}, [user?.first_name]);
+
 	const [inputQuery, setInputQuery] = useState("");
 	const [inputValidationError, setInputValidationError] = useState<string | null>(null);
+
+	// File upload state
+	const [uploadingFile, setUploadingFile] = useState<boolean>(false);
+	const [attachedBlob, setAttachedBlob] = useState<{ url: string; filename: string } | null>(null);
+	const fileInputRef = useRef<HTMLInputElement>(null);
 
 	const [isStreaming, setIsStreaming] = useState(false);
 	const [currentStreamText, setCurrentStreamText] = useState("");
@@ -40,7 +56,7 @@ export const ChatbotPage: React.FC = () => {
 
 	const validateQuery = (query: string): string | null => {
 		const trimmed = query.trim();
-		if (!trimmed) {
+		if (!trimmed && !attachedBlob) {
 			return "Please enter a message or policy inquiry before sending.";
 		}
 		if (trimmed.length > 1000) {
@@ -49,17 +65,74 @@ export const ChatbotPage: React.FC = () => {
 		return null;
 	};
 
-	const handleSend = async (queryToSend?: string) => {
-		const query = (queryToSend || inputQuery).trim();
+	const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const files = e.target.files;
+		if (!files || files.length === 0) return;
 
-		// Validation check
-		const validationErr = validateQuery(query);
+		const file = files[0];
+		setUploadingFile(true);
+		setStreamError(null);
+
+		try {
+			const res = await uploadFileApi(file);
+			if (res.is_success && res.payload) {
+				setAttachedBlob({
+					url: res.payload.blob_url,
+					filename: res.payload.original_filename || res.payload.filename || file.name,
+				});
+			} else {
+				setStreamError(res.message || res.error || "Please contact developer");
+			}
+		} catch (err: unknown) {
+			setStreamError((err as Error).message || "Please contact developer");
+		} finally {
+			setUploadingFile(false);
+			if (fileInputRef.current) {
+				fileInputRef.current.value = "";
+			}
+		}
+	};
+
+	const renderMessageContent = (content: string, role: string) => {
+		if (role !== "user") {
+			return content;
+		}
+
+		const urlMatch = content.match(/Attached Document URL:\s*(https?:\/\/\S+)/i);
+		if (urlMatch) {
+			const cleanText = content.replace(/Attached Document URL:\s*https?:\/\/\S+/gi, "").trim();
+			const fullUrl = urlMatch[1];
+			const urlParts = fullUrl.split("/");
+			const filenameWithUuid = urlParts[urlParts.length - 1].split("?")[0];
+			const displayFilename = filenameWithUuid.includes("_") ? filenameWithUuid.split("_").slice(1).join("_") : filenameWithUuid;
+
+			return (
+				<div className="space-y-2">
+					<div>{cleanText || "Document attached for HR request."}</div>
+					<div className="inline-flex items-center space-x-1.5 bg-indigo-700/60 border border-indigo-400/40 text-indigo-100 px-2.5 py-1 rounded-lg text-xs font-semibold">
+						<span>📎 Attachment: {decodeURIComponent(displayFilename) || "Document"}</span>
+					</div>
+				</div>
+			);
+		}
+
+		return content;
+	};
+
+	const handleSend = async (queryToSend?: string) => {
+		const rawQuery = (queryToSend || inputQuery).trim();
+
+		const validationErr = validateQuery(rawQuery);
 		if (validationErr) {
 			setInputValidationError(validationErr);
 			return;
 		}
 
+		const attachmentUrl = attachedBlob?.url;
+		const queryForAgent = attachmentUrl ? `${rawQuery}\nAttached Document URL: ${attachmentUrl}` : rawQuery;
+
 		setInputQuery("");
+		setAttachedBlob(null);
 		setInputValidationError(null);
 		setStreamError(null);
 		setIsStreaming(true);
@@ -67,7 +140,7 @@ export const ChatbotPage: React.FC = () => {
 		setActiveTools([]);
 		setModelUsed(null);
 
-		const userMessage: ChatMessage = { role: "user", content: query };
+		const userMessage: ChatMessage = { role: "user", content: queryForAgent };
 		const updatedHistory = [...messages, userMessage];
 		setMessages(updatedHistory);
 
@@ -79,7 +152,7 @@ export const ChatbotPage: React.FC = () => {
 		try {
 			await streamChatApi(
 				{
-					query,
+					query: queryForAgent,
 					chat_history: updatedHistory.slice(-10),
 				},
 				(eventData) => {
@@ -93,7 +166,7 @@ export const ChatbotPage: React.FC = () => {
 						accumulatedText += eventData.token;
 						setCurrentStreamText(accumulatedText);
 					} else if (eventData.event === "done") {
-						const finalAnswer = eventData.response.answer || accumulatedText;
+						const finalAnswer = eventData.response.answer || accumulatedText || "I have processed your request.";
 						setMessages((prev) => [...prev, { role: "assistant", content: finalAnswer }]);
 						setCurrentStreamText("");
 						setActiveTools([]);
@@ -152,20 +225,20 @@ export const ChatbotPage: React.FC = () => {
 	};
 
 	return (
-		<div className="flex flex-col h-[calc(100vh-65px)] bg-slate-950 text-slate-100 font-sans">
+		<div className="flex flex-col h-[calc(100vh-65px)] bg-slate-50 text-slate-900 font-sans">
 			{/* Header Bar */}
-			<div className="flex items-center justify-between px-6 py-3 border-b border-slate-800 bg-slate-900/60 backdrop-blur">
+			<div className="flex items-center justify-between px-6 py-3 border-b border-slate-200 bg-white shadow-xs">
 				<div className="flex items-center space-x-3">
-					<div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center font-bold text-white shadow-md">
+					<div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center font-bold text-white shadow-sm">
 						AI
 					</div>
 					<div>
-						<h1 className="font-semibold text-white text-sm sm:text-base">HR Policy & Request Agent</h1>
-						<p className="text-xs text-slate-400">Policy-Grounded RAG • Interactive Session</p>
+						<h1 className="font-semibold text-slate-900 text-sm sm:text-base">HR Policy & Request Agent</h1>
+						<p className="text-xs text-slate-500">Policy-Grounded RAG • Interactive Session</p>
 					</div>
 				</div>
 				{modelUsed && (
-					<span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-500/10 border border-indigo-500/30 text-indigo-400">
+					<span className="hidden sm:inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-50 border border-indigo-200 text-indigo-700">
 						Model: {modelUsed}
 					</span>
 				)}
@@ -173,12 +246,12 @@ export const ChatbotPage: React.FC = () => {
 
 			{/* Stream Error Alert Banner */}
 			{streamError && (
-				<div className="bg-red-500/10 border-b border-red-500/30 px-6 py-2 text-xs text-red-300 flex items-center justify-between">
+				<div className="bg-red-50 border-b border-red-200 px-6 py-2.5 text-xs text-red-800 flex items-center justify-between">
 					<span className="flex items-center space-x-2">
 						<span>⚠️</span>
 						<span>{streamError}</span>
 					</span>
-					<button onClick={() => setStreamError(null)} className="text-red-400 hover:text-white font-bold px-2 py-0.5">
+					<button onClick={() => setStreamError(null)} className="text-red-600 hover:text-red-900 font-bold px-2 py-0.5">
 						Dismiss
 					</button>
 				</div>
@@ -189,13 +262,11 @@ export const ChatbotPage: React.FC = () => {
 				{messages.map((msg, idx) => (
 					<div key={idx} className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
 						<div
-							className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 shadow-md leading-relaxed text-sm ${
-								msg.role === "user"
-									? "bg-indigo-600 text-white rounded-br-none"
-									: "bg-slate-800/90 text-slate-200 border border-slate-700/70 rounded-bl-none"
+							className={`max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 shadow-sm leading-relaxed text-sm ${
+								msg.role === "user" ? "bg-indigo-600 text-white rounded-br-none" : "bg-white text-slate-800 border border-slate-200 rounded-bl-none"
 							}`}
 						>
-							<div className="whitespace-pre-wrap">{msg.content}</div>
+							<div className="whitespace-pre-wrap">{renderMessageContent(msg.content, msg.role)}</div>
 						</div>
 					</div>
 				))}
@@ -209,10 +280,10 @@ export const ChatbotPage: React.FC = () => {
 								{activeTools.map((t, index) => (
 									<div
 										key={index}
-										className="flex items-center space-x-2 text-xs bg-slate-900/80 border border-indigo-500/30 text-indigo-300 px-3 py-2 rounded-xl"
+										className="flex items-center space-x-2 text-xs bg-white border border-indigo-200 text-indigo-800 px-3 py-2 rounded-xl shadow-xs"
 									>
 										{t.status === "running" ? (
-											<svg className="animate-spin h-3.5 w-3.5 text-indigo-400" fill="none" viewBox="0 0 24 24">
+											<svg className="animate-spin h-3.5 w-3.5 text-indigo-600" fill="none" viewBox="0 0 24 24">
 												<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
 												<path
 													className="opacity-75"
@@ -221,7 +292,7 @@ export const ChatbotPage: React.FC = () => {
 												></path>
 											</svg>
 										) : (
-											<span className="text-emerald-400 font-bold">✓</span>
+											<span className="text-emerald-600 font-bold">✓</span>
 										)}
 										<span>{getToolDisplayName(t.tool)}</span>
 									</div>
@@ -230,7 +301,7 @@ export const ChatbotPage: React.FC = () => {
 						)}
 
 						{/* Token Streaming Message Box */}
-						<div className="max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 bg-slate-800/90 text-slate-200 border border-slate-700/70 rounded-bl-none shadow-md text-sm">
+						<div className="max-w-[85%] sm:max-w-[75%] rounded-2xl p-4 bg-white text-slate-800 border border-slate-200 rounded-bl-none shadow-sm text-sm">
 							<div className="whitespace-pre-wrap">
 								{currentStreamText || (
 									<span className="inline-flex items-center space-x-1 text-slate-400 italic">
@@ -249,13 +320,13 @@ export const ChatbotPage: React.FC = () => {
 			{/* Suggested Prompts */}
 			{!isStreaming && messages.length <= 2 && (
 				<div className="px-6 py-2">
-					<p className="text-xs text-slate-400 font-medium mb-2">Suggested Inquiries:</p>
+					<p className="text-xs text-slate-500 font-medium mb-2">Suggested Inquiries:</p>
 					<div className="flex flex-wrap gap-2">
 						{quickPrompts.map((prompt, i) => (
 							<button
 								key={i}
 								onClick={() => handleSend(prompt)}
-								className="text-xs bg-slate-900 hover:bg-indigo-600/20 border border-slate-800 hover:border-indigo-500/50 text-slate-300 hover:text-indigo-300 px-3 py-1.5 rounded-lg transition text-left"
+								className="text-xs bg-white hover:bg-indigo-50 border border-slate-200 hover:border-indigo-300 text-slate-700 hover:text-indigo-700 px-3 py-1.5 rounded-lg transition text-left shadow-xs"
 							>
 								{prompt}
 							</button>
@@ -264,8 +335,11 @@ export const ChatbotPage: React.FC = () => {
 				</div>
 			)}
 
+			{/* Hidden File Input */}
+			<input type="file" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+
 			{/* Input Area */}
-			<div className="p-4 border-t border-slate-800 bg-slate-900/80">
+			<div className="p-4 border-t border-slate-200 bg-white">
 				<form
 					onSubmit={(e) => {
 						e.preventDefault();
@@ -274,13 +348,51 @@ export const ChatbotPage: React.FC = () => {
 					className="max-w-5xl mx-auto space-y-2"
 				>
 					{inputValidationError && (
-						<div className="text-xs text-red-400 flex items-center space-x-1 px-1">
+						<div className="text-xs text-red-600 flex items-center space-x-1 px-1">
 							<span>⚠️</span>
 							<span>{inputValidationError}</span>
 						</div>
 					)}
 
-					<div className="flex items-center space-x-3">
+					{/* Attached File Chip */}
+					{attachedBlob && (
+						<div className="flex items-center space-x-2 bg-indigo-50 border border-indigo-200 text-indigo-800 px-3 py-1.5 rounded-xl text-xs w-fit">
+							<span>📎 {attachedBlob.filename}</span>
+							<button type="button" onClick={() => setAttachedBlob(null)} className="text-indigo-600 hover:text-indigo-900 font-bold ml-1">
+								✕
+							</button>
+						</div>
+					)}
+
+					<div className="flex items-center space-x-2 sm:space-x-3">
+						<button
+							type="button"
+							onClick={() => fileInputRef.current?.click()}
+							disabled={isStreaming || uploadingFile}
+							title="Attach Receipt or Document"
+							className="p-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition border border-slate-200 disabled:opacity-50 flex items-center justify-center"
+						>
+							{uploadingFile ? (
+								<svg className="animate-spin h-5 w-5 text-indigo-600" fill="none" viewBox="0 0 24 24">
+									<circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+									<path
+										className="opacity-75"
+										fill="currentColor"
+										d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+									></path>
+								</svg>
+							) : (
+								<svg className="w-5 h-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+									<path
+										strokeLinecap="round"
+										strokeLinejoin="round"
+										strokeWidth="2"
+										d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+									/>
+								</svg>
+							)}
+						</button>
+
 						<input
 							type="text"
 							value={inputQuery}
@@ -290,8 +402,8 @@ export const ChatbotPage: React.FC = () => {
 							}}
 							disabled={isStreaming}
 							placeholder="Ask about policies, balances, or submit an HR request..."
-							className={`flex-1 bg-slate-950 border rounded-xl px-4 py-3 text-sm text-white placeholder-slate-500 focus:outline-none transition disabled:opacity-50 ${
-								inputValidationError ? "border-red-500 focus:ring-2 focus:ring-red-500/50" : "border-slate-800 focus:ring-2 focus:ring-indigo-500"
+							className={`flex-1 bg-slate-50 border rounded-xl px-4 py-3 text-sm text-slate-900 placeholder-slate-400 focus:outline-none transition disabled:opacity-50 ${
+								inputValidationError ? "border-red-500 focus:ring-2 focus:ring-red-500/20" : "border-slate-200 focus:ring-2 focus:ring-indigo-500"
 							}`}
 						/>
 
@@ -299,7 +411,7 @@ export const ChatbotPage: React.FC = () => {
 							<button
 								type="button"
 								onClick={handleStop}
-								className="px-4 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-sm font-semibold transition flex items-center space-x-1 shadow-lg shadow-red-600/20"
+								className="px-4 py-3 bg-red-600 hover:bg-red-500 text-white rounded-xl text-sm font-semibold transition flex items-center space-x-1 shadow-md shadow-red-600/20"
 							>
 								<svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
 									<rect x="6" y="6" width="12" height="12" rx="2" />
@@ -309,8 +421,8 @@ export const ChatbotPage: React.FC = () => {
 						) : (
 							<button
 								type="submit"
-								disabled={!inputQuery.trim()}
-								className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-lg shadow-indigo-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center space-x-2"
+								disabled={!inputQuery.trim() && !attachedBlob}
+								className="px-5 py-3 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-sm font-semibold shadow-md shadow-indigo-600/20 disabled:opacity-40 disabled:cursor-not-allowed transition flex items-center space-x-2"
 							>
 								<span>Send</span>
 								<svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">

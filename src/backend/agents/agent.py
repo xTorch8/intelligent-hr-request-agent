@@ -8,6 +8,7 @@ from langchain_openai import ChatOpenAI
 from ..configs.openai_config import OpenAIConfig
 from ..guardrails.prompt_guardrail import PromptGuardrail
 from ..models.agent_model import AgentQueryRequest, AgentQueryResponse, ChatMessage
+from ..models.auth_model import UserPayload
 from ..models.guardrail_model import GuardrailRequest
 from ..prompts.agent_prompts import AGENT_SYSTEM_PROMPT, ROUTER_SYSTEM_PROMPT
 from ..tools.employee_tools import (
@@ -35,8 +36,22 @@ class Agent:
         ]
         self._tool_map = {t.name: t for t in self._tools}
 
-    def ask(self, request: AgentQueryRequest) -> AgentQueryResponse:
-        logging.info(f"[INFO][agent.py][ask] Processing query: '{request.query}'")
+    def _build_system_prompt(self, current_user: Optional[UserPayload]) -> str:
+        system_prompt = AGENT_SYSTEM_PROMPT
+        if current_user and current_user.employee_number:
+            emp_name = f"{current_user.first_name or ''} {current_user.last_name or ''}".strip() or current_user.email
+            system_prompt += (
+                f"\n\nCURRENT AUTHENTICATED USER CONTEXT:\n"
+                f"- Employee Number: {current_user.employee_number}\n"
+                f"- Name: {emp_name}\n"
+                f"- Email: {current_user.email}\n"
+                f"- Role: {current_user.role}\n"
+                f"CRITICAL: Always use the authenticated employee's employee_number ('{current_user.employee_number}') for all employee tool calls (get_employee_profile, get_leave_balance, submit_leave_request, submit_benefit_claim, submit_expense_claim) unless the user explicitly asks for another employee."
+            )
+        return system_prompt
+
+    def ask(self, request: AgentQueryRequest, current_user: Optional[UserPayload] = None) -> AgentQueryResponse:
+        logging.info(f"[INFO][agent.py][ask] Processing query: '{request.query}' for employee: {current_user.employee_number if current_user else 'None'}")
         try:
             guardrail_result = self._prompt_guardrail.validate(GuardrailRequest(input = request.query))
             if not guardrail_result.is_safe:
@@ -76,7 +91,8 @@ class Agent:
             if request.policy_id:
                 prompt_text = f"{request.query} (Policy ID: {request.policy_id})"
 
-            messages = [SystemMessage(content = AGENT_SYSTEM_PROMPT)]
+            system_prompt = self._build_system_prompt(current_user)
+            messages = [SystemMessage(content = system_prompt)]
             messages.extend(history_messages)
             messages.append(HumanMessage(content = prompt_text))
 
@@ -87,6 +103,7 @@ class Agent:
 
             if response.tool_calls:
                 messages.append(response)
+                tool_results_collected = []
                 for tool_call in response.tool_calls:
                     tool_name = tool_call["name"]
                     tool_args = tool_call["args"]
@@ -96,6 +113,7 @@ class Agent:
                         tool_func = self._tool_map[tool_name]
                         tool_output = tool_func.invoke(tool_args)
                         tool_output_str = str(tool_output)
+                        tool_results_collected.append(tool_output_str)
 
                         messages.append(
                             ToolMessage(
@@ -106,9 +124,14 @@ class Agent:
                         )
 
                 final_response = llm_with_tools.invoke(messages)
-                answer_text = str(final_response.content)
+                answer_text = str(final_response.content) if final_response.content else ""
+                if not answer_text.strip() and tool_results_collected:
+                    answer_text = "\n\n".join(tool_results_collected)
             else:
-                answer_text = str(response.content)
+                answer_text = str(response.content) if response.content else "I have received your request."
+
+            if not answer_text.strip():
+                answer_text = "I have processed your request successfully."
 
             updated_history.append(ChatMessage(role = "assistant", content = answer_text))
 
@@ -123,8 +146,8 @@ class Agent:
             logging.error(f"[ERROR][agent.py][ask] Failed to process agent query. Error: {e}")
             raise e
 
-    async def stream_ask(self, request: AgentQueryRequest) -> AsyncGenerator[str, None]:
-        logging.info(f"[INFO][agent.py][stream_ask] Streaming query processing: '{request.query}'")
+    async def stream_ask(self, request: AgentQueryRequest, current_user: Optional[UserPayload] = None) -> AsyncGenerator[str, None]:
+        logging.info(f"[INFO][agent.py][stream_ask] Streaming query processing: '{request.query}' for employee: {current_user.employee_number if current_user else 'None'}")
         try:
             guardrail_result = self._prompt_guardrail.validate(GuardrailRequest(input = request.query))
             if not guardrail_result.is_safe:
@@ -169,7 +192,8 @@ class Agent:
             if request.policy_id:
                 prompt_text = f"{request.query} (Policy ID: {request.policy_id})"
 
-            messages = [SystemMessage(content = AGENT_SYSTEM_PROMPT)]
+            system_prompt = self._build_system_prompt(current_user)
+            messages = [SystemMessage(content = system_prompt)]
             messages.extend(history_messages)
             messages.append(HumanMessage(content = prompt_text))
 
@@ -180,6 +204,7 @@ class Agent:
 
             if response.tool_calls:
                 messages.append(response)
+                tool_results_collected = []
                 for tool_call in response.tool_calls:
                     tool_name = tool_call["name"]
                     tool_args = tool_call["args"]
@@ -191,6 +216,7 @@ class Agent:
                         tool_func = self._tool_map[tool_name]
                         tool_output = tool_func.invoke(tool_args)
                         tool_output_str = str(tool_output)
+                        tool_results_collected.append(tool_output_str)
 
                         yield f"data: {json.dumps({'event': 'tool_end', 'tool': tool_name, 'result': tool_output_str})}\n\n"
 
@@ -208,9 +234,18 @@ class Agent:
                         token_str = str(chunk.content)
                         accumulated_answer = accumulated_answer + token_str
                         yield f"data: {json.dumps({'event': 'token', 'token': token_str})}\n\n"
+
+                if not accumulated_answer.strip() and tool_results_collected:
+                    accumulated_answer = "\n\n".join(tool_results_collected)
+                    yield f"data: {json.dumps({'event': 'token', 'token': accumulated_answer})}\n\n"
             else:
-                accumulated_answer = str(response.content)
+                accumulated_answer = str(response.content) if response.content else ""
+                if not accumulated_answer.strip():
+                    accumulated_answer = "I have received your request."
                 yield f"data: {json.dumps({'event': 'token', 'token': accumulated_answer})}\n\n"
+
+            if not accumulated_answer.strip():
+                accumulated_answer = "I have processed your request successfully."
 
             updated_history.append(ChatMessage(role = "assistant", content = accumulated_answer))
 

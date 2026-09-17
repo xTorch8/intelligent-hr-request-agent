@@ -1,6 +1,6 @@
 import type { APIResponseModel, LoginResponse, UserPayload } from "../types/auth";
 import type { AgentQueryRequest, SSEEvent } from "../types/agent";
-import type { GetRequestListFilterRequest, RequestListResponse, UpdateRequestStatusRequest } from "../types/request";
+import type { CancelRequestInput, GetRequestListFilterRequest, RequestListResponse, UpdateRequestStatusRequest } from "../types/request";
 
 const BASE_URL = import.meta.env.BACKEND_BASE_URL.replace(/\/+$/, "");
 
@@ -45,6 +45,9 @@ export async function getRequestsApi(filters?: GetRequestListFilterRequest): Pro
 	if (filters?.request_type) params.append("request_type", filters.request_type);
 	if (filters?.status) params.append("status", filters.status);
 	if (filters?.employee_number) params.append("employee_number", filters.employee_number);
+	if (filters?.my_requests_only) params.append("my_requests_only", "true");
+	if (filters?.page) params.append("page", filters.page.toString());
+	if (filters?.page_size) params.append("page_size", filters.page_size.toString());
 
 	const queryString = params.toString() ? `?${params.toString()}` : "";
 	const res = await fetch(`${BASE_URL}/api/request/list${queryString}`, {
@@ -96,6 +99,44 @@ export async function rejectRequestApi(payload: UpdateRequestStatusRequest): Pro
 	}
 
 	return res.json();
+}
+
+export async function cancelRequestApi(payload: CancelRequestInput): Promise<APIResponseModel<boolean>> {
+	const res = await fetch(`${BASE_URL}/api/request/cancel`, {
+		method: "POST",
+		headers: {
+			"Content-Type": "application/json",
+			...getAuthHeader(),
+		},
+		body: JSON.stringify(payload),
+	});
+
+	if (!res.ok) {
+		const errorData = await res.json().catch(() => ({}));
+		throw new Error(errorData.detail || errorData.message || errorData.error || "Failed to cancel request");
+	}
+
+	return res.json();
+}
+
+export async function uploadFileApi(file: File): Promise<APIResponseModel<{ blob_url: string; filename: string; original_filename?: string }>> {
+	const formData = new FormData();
+	formData.append("file", file);
+
+	const res = await fetch(`${BASE_URL}/api/file/upload`, {
+		method: "POST",
+		headers: {
+			...getAuthHeader(),
+		},
+		body: formData,
+	});
+
+	const resData = await res.json().catch(() => ({}));
+	if (!res.ok || resData.is_success === false) {
+		throw new Error(resData.detail || resData.message || resData.error || "Please contact developer");
+	}
+
+	return resData;
 }
 
 export async function streamChatApi(chatReq: AgentQueryRequest, onEvent: (event: SSEEvent) => void, signal?: AbortSignal): Promise<void> {

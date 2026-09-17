@@ -5,6 +5,7 @@ from ..models.api_model import APIResponseModel
 from ..models.auth_model import UserPayload
 from ..models.request_model import (
     BenefitClaimDecisionResponse,
+    CancelRequestInput,
     ExpenseClaimDecisionResponse,
     GetRequestListFilterRequest,
     LeaveRequestDecisionResponse,
@@ -52,8 +53,11 @@ async def process_expense_claim(
 @router.get("/list", response_model = APIResponseModel[Optional[RequestListResponse]])
 async def get_requests(
     filter_req: GetRequestListFilterRequest = Depends(),
-    current_user: UserPayload = Depends(require_role(["HR_ADMIN"]))
+    current_user: UserPayload = Depends(get_current_user)
 ):
+    if current_user.role != "HR_ADMIN" or filter_req.my_requests_only:
+        filter_req.employee_number = current_user.employee_number
+
     return request_service.get_requests(filter_req)
 
 
@@ -71,3 +75,11 @@ async def reject_request(
     current_user: UserPayload = Depends(require_role(["HR_ADMIN"]))
 ):
     return request_service.update_request_status(request, new_status = "REJECTED")
+
+
+@router.post("/cancel", response_model = APIResponseModel[bool])
+async def cancel_request(
+    request: CancelRequestInput,
+    current_user: UserPayload = Depends(get_current_user)
+):
+    return request_service.cancel_request(request, actor_id = current_user.employee_id)

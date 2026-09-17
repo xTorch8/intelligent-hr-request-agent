@@ -4,7 +4,7 @@ import re
 
 class PromptGuardrail:
     def __init__(self):
-        self._maximum_length = 1000
+        self._maximum_length = 3000
         self._override_patterns = [
             re.compile(r"ignore\s+(?:all\s+|previous\s+|prior\s+)?(?:instructions?|directives?|rules?|constraints?|prompts?)", re.IGNORECASE),
             re.compile(r"disregard\s+(?:all\s+|previous\s+|prior\s+)?(?:instructions?|directives?|rules?|constraints?|prompts?)", re.IGNORECASE),
@@ -98,8 +98,9 @@ class PromptGuardrail:
                         error = "Delimiter/Instruction Boundary Manipulation detected."
                     )
 
+            clean_input_for_obfuscation = re.sub(r"https?://[^\s]+", "", request.input)
             for pattern in self._obfuscation_patterns:
-                if pattern.search(request.input):
+                if pattern.search(clean_input_for_obfuscation):
                     return GuardrailResponse(
                         is_safe = False,
                         error = "Obfuscation Pattern detected."

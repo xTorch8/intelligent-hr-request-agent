@@ -38,12 +38,20 @@ class GetRequestListFilterRequest(BaseModel):
     request_type: Optional[str] = Field(default = None, description = "Optional filter: LEAVE, EXPENSE, BENEFIT")
     status: Optional[str] = Field(default = None, description = "Optional filter: SUBMITTED, PROCESSING, PENDING_REVIEW, APPROVED, REJECTED, COMPLETED, CANCELLED")
     employee_number: Optional[str] = Field(default = None, description = "Optional filter by employee_number e.g. EMP-0001")
+    my_requests_only: Optional[bool] = Field(default = False, description = "Filter requests strictly for current authenticated user")
+    page: Optional[int] = Field(default = 1, description = "Page number (1-based)")
+    page_size: Optional[int] = Field(default = 10, description = "Items per page")
 
 
 class UpdateRequestStatusRequest(BaseModel):
     request_id: str = Field(..., description = "Request UUID")
     actor_id: Optional[str] = Field(default = None, description = "HR Admin employee UUID")
     reason: Optional[str] = Field(default = None, description = "Reason for decision")
+
+
+class CancelRequestInput(BaseModel):
+    request_id: str = Field(..., description = "Request UUID to cancel")
+    reason: Optional[str] = Field(default = None, description = "Reason for request cancellation")
 
 
 class RuleCheckResult(BaseModel):
@@ -118,13 +126,18 @@ class RequestSummaryItem(BaseModel):
     status: str
     title: str
     description: Optional[str] = None
+    blob_url: Optional[str] = None
     recommendation: Optional[str] = None
     eligibility_result: Optional[str] = None
     reasoning_summary: Optional[str] = None
+    decision_reason: Optional[str] = None
     submitted_at: datetime
     updated_at: datetime
 
 
 class RequestListResponse(BaseModel):
     total_count: int
+    page: int = 1
+    page_size: int = 10
+    total_pages: int = 1
     requests: List[RequestSummaryItem]

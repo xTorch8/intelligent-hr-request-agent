@@ -29,7 +29,9 @@ class AuthService:
                 "employee_id": user["employee_id"],
                 "employee_number": user["employee_number"],
                 "email": user["email"],
-                "role": user["role"]
+                "role": user["role"],
+                "first_name": user.get("first_name"),
+                "last_name": user.get("last_name")
             }
             access_token = create_access_token(data = token_payload)
 
@@ -62,6 +64,23 @@ class AuthService:
             )
 
     def get_me(self, user_payload: UserPayload) -> APIResponseModel[Optional[UserPayload]]:
+        user = self._auth_repository.get_user_by_email(user_payload.email)
+        if user:
+            full_payload = UserPayload(
+                user_id = user["user_id"],
+                employee_id = user["employee_id"],
+                employee_number = user["employee_number"],
+                email = user["email"],
+                role = user["role"],
+                first_name = user.get("first_name"),
+                last_name = user.get("last_name")
+            )
+            return APIResponseModel[Optional[UserPayload]](
+                is_success = True,
+                status_code = 200,
+                message = "Current user retrieved successfully",
+                payload = full_payload
+            )
         return APIResponseModel[Optional[UserPayload]](
             is_success = True,
             status_code = 200,

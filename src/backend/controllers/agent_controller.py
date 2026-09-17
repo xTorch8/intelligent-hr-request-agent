@@ -20,7 +20,7 @@ async def chat_with_agent(
     request: AgentQueryRequest,
     current_user: UserPayload = Depends(get_current_user)
 ):
-    return agent_service.ask(request)
+    return agent_service.ask(request, current_user = current_user)
 
 
 @router.post("/chat/stream")
@@ -29,6 +29,6 @@ async def chat_with_agent_stream(
     current_user: UserPayload = Depends(get_current_user)
 ):
     return StreamingResponse(
-        agent_service.stream_ask(request),
+        agent_service.stream_ask(request, current_user = current_user),
         media_type = "text/event-stream"
     )

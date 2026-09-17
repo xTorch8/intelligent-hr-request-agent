@@ -1,4 +1,3 @@
-from datetime import datetime
 from langchain_core.tools import tool
 from typing import Optional
 
@@ -14,24 +13,33 @@ from ..models.request_model import (
 )
 from ..services.employee_service import EmployeeService
 from ..services.request_service import RequestService
+from ..utils.input_sanitizer import (
+    parse_date,
+    standardize_employee_number,
+    standardize_str
+)
 
 
 @tool("get_employee_profile")
 def get_employee_profile(employee_number: str) -> str:
     """
     Use this tool to retrieve the profile details of an employee (such as name, email, department, job title, employment status, hire date).
-    Accepts employee_number (e.g. 'EMP-0001').
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002'). NEVER pass internal UUID employee_id.
     """
+    try:
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
     service = EmployeeService()
-    request = EmployeeProfileRequest(employee_number = employee_number)
+    request = EmployeeProfileRequest(employee_number = emp_num)
     response = service.get_employee_profile(request)
     if not response.payload:
-        return f"Employee profile not found for employee_number: {employee_number}"
-    
+        return f"Employee profile not found for employee_number: {emp_num}"
+
     profile = response.payload
     return (
         f"Employee Profile:\n"
-        f"- ID: {profile.employee_id}\n"
         f"- Employee Number: {profile.employee_number}\n"
         f"- Name: {profile.first_name} {profile.last_name}\n"
         f"- Email: {profile.email}\n"
@@ -47,19 +55,24 @@ def get_employee_profile(employee_number: str) -> str:
 def get_leave_balance(employee_number: str, year: Optional[int] = 2026) -> str:
     """
     Use this tool to retrieve the remaining leave balance for an employee across leave types (ANNUAL, SICK, etc.) from the leave_balances table.
-    Accepts employee_number (e.g. 'EMP-0001').
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002'). NEVER pass internal UUID employee_id.
     """
+    try:
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
     service = EmployeeService()
-    request = LeaveBalanceRequest(employee_number = employee_number, year = year)
+    request = LeaveBalanceRequest(employee_number = emp_num, year = year)
     response = service.get_leave_balance(request)
     if not response.payload or not response.payload.balances:
-        return f"Leave balance not found for employee_number: {employee_number} in year {year}"
-    
+        return f"Leave balance not found for employee_number: {emp_num} in year {year}"
+
     balance_resp = response.payload
-    lines = [f"Leave Balances for Year {balance_resp.year} (Employee ID: {balance_resp.employee_id}):"]
+    lines = [f"Leave Balances for Year {balance_resp.year} (Employee Number: {emp_num}):"]
     for b in balance_resp.balances:
         lines.append(f"- {b.leave_type}: Total = {b.total_days} days, Used = {b.used_days} days, Remaining = {b.remaining_days} days")
-    
+
     return "\n".join(lines)
 
 
@@ -67,16 +80,22 @@ def get_leave_balance(employee_number: str, year: Optional[int] = 2026) -> str:
 def get_health_benefit(employee_number: str, benefit_type: Optional[str] = None) -> str:
     """
     Use this tool to retrieve employee benefit details (plan name, coverage percentage, annual limit, used amount, remaining limit) from the employee_benefits table.
-    Accepts employee_number (e.g. 'EMP-0001') and optional benefit_type (e.g. 'HEALTH', 'DENTAL').
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002') and optional benefit_type (e.g. 'HEALTH', 'DENTAL'). NEVER pass internal UUID employee_id.
     """
+    try:
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
+    b_type = standardize_str(benefit_type)
     service = EmployeeService()
-    request = HealthBenefitRequest(employee_number = employee_number, benefit_type = benefit_type)
+    request = HealthBenefitRequest(employee_number = emp_num, benefit_type = b_type)
     response = service.get_health_benefit(request)
     if not response.payload or not response.payload.benefits:
-        return f"Health/Benefit plans not found for employee_number: {employee_number}"
-    
+        return f"Health/Benefit plans not found for employee_number: {emp_num}"
+
     benefit_resp = response.payload
-    lines = [f"Employee Benefit Plans (Employee ID: {benefit_resp.employee_id}):"]
+    lines = [f"Employee Benefit Plans (Employee Number: {emp_num}):"]
     for item in benefit_resp.benefits:
         cov = f"{item.coverage_percentage}%" if item.coverage_percentage is not None else "N/A"
         ann_lim = f"${item.annual_limit:,.2f}" if item.annual_limit is not None else "No Limit"
@@ -86,7 +105,7 @@ def get_health_benefit(employee_number: str, benefit_type: Optional[str] = None)
             f"  Coverage: {cov} | Annual Limit: {ann_lim} | Used: ${item.used_amount:,.2f} | Remaining: {rem_lim}\n"
             f"  Effective: {item.effective_date} to {item.expiration_date or 'Indefinite'}"
         )
-    
+
     return "\n".join(lines)
 
 
@@ -101,18 +120,25 @@ def submit_leave_request(
 ) -> str:
     """
     Use this tool to submit and evaluate a Leave Request for an employee against deterministic business rules (employment status, available balance, max consecutive days, notice period, overlapping leave).
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002'). NEVER pass internal UUID employee_id.
     Dates must be formatted as YYYY-MM-DD (e.g. '2026-10-01').
     """
     try:
-        parsed_start = datetime.strptime(start_date, "%Y-%m-%d").date()
-        parsed_end = datetime.strptime(end_date, "%Y-%m-%d").date()
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
+    std_leave_type = standardize_str(leave_type) or "ANNUAL"
+    try:
+        parsed_start = parse_date(start_date)
+        parsed_end = parse_date(end_date)
     except Exception as e:
         return f"Invalid date format for start_date or end_date. Must be YYYY-MM-DD. Error: {e}"
 
     service = RequestService()
     req = ProcessLeaveRequest(
-        employee_number = employee_number,
-        leave_type = leave_type,
+        employee_number = emp_num,
+        leave_type = std_leave_type,
         start_date = parsed_start,
         end_date = parsed_end,
         requested_days = requested_days,
@@ -152,21 +178,28 @@ def submit_benefit_claim(
 ) -> str:
     """
     Use this tool to submit and evaluate a Health/Benefits Claim for an employee against deterministic business rules (employee eligibility, benefit plan existence, coverage calculation, annual limit, waiting period, medical document requirement).
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002'). NEVER pass internal UUID employee_id.
     Date must be formatted as YYYY-MM-DD (e.g. '2026-08-15').
     """
     try:
-        parsed_service_date = datetime.strptime(service_date, "%Y-%m-%d").date()
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
+    std_benefit_type = standardize_str(benefit_type) or "HEALTH"
+    try:
+        parsed_service_date = parse_date(service_date)
     except Exception as e:
         return f"Invalid date format for service_date. Must be YYYY-MM-DD. Error: {e}"
 
     service = RequestService()
     req = ProcessBenefitClaimRequest(
-        employee_number = employee_number,
-        benefit_type = benefit_type,
+        employee_number = emp_num,
+        benefit_type = std_benefit_type,
         service_date = parsed_service_date,
         provider_name = provider_name,
         claim_amount = claim_amount,
-        currency = currency,
+        currency = currency.strip().upper(),
         description = description,
         blob_url = blob_url
     )
@@ -205,21 +238,28 @@ def submit_expense_claim(
 ) -> str:
     """
     Use this tool to submit and evaluate an Expense/Reimbursement Claim for an employee against deterministic business rules (employee status, category support, maximum claim limit, reimbursement rate, duplicate claim protection, receipt requirement).
+    Accepts employee_number (e.g. 'EMP-0001', 'EMP-0002'). NEVER pass internal UUID employee_id.
     Date must be formatted as YYYY-MM-DD (e.g. '2026-08-20').
     """
     try:
-        parsed_expense_date = datetime.strptime(expense_date, "%Y-%m-%d").date()
+        emp_num = standardize_employee_number(employee_number)
+    except Exception as e:
+        return f"Error: {e}"
+
+    std_category = standardize_str(expense_category) or "MEALS"
+    try:
+        parsed_expense_date = parse_date(expense_date)
     except Exception as e:
         return f"Invalid date format for expense_date. Must be YYYY-MM-DD. Error: {e}"
 
     service = RequestService()
     req = ProcessExpenseClaimRequest(
-        employee_number = employee_number,
-        expense_category = expense_category,
+        employee_number = emp_num,
+        expense_category = std_category,
         expense_date = parsed_expense_date,
         merchant = merchant,
         claim_amount = claim_amount,
-        currency = currency,
+        currency = currency.strip().upper(),
         description = description,
         blob_url = blob_url
     )

@@ -13,15 +13,20 @@ export interface RequestSummaryItem {
 	status: string;
 	title: string;
 	description?: string | null;
+	blob_url?: string | null;
 	recommendation?: string | null;
 	eligibility_result?: string | null;
 	reasoning_summary?: string | null;
+	decision_reason?: string | null;
 	submitted_at: string;
 	updated_at: string;
 }
 
 export interface RequestListResponse {
 	total_count: number;
+	page: number;
+	page_size: number;
+	total_pages: number;
 	requests: RequestSummaryItem[];
 }
 
@@ -29,11 +34,19 @@ export interface GetRequestListFilterRequest {
 	request_type?: RequestTypeFilter | string;
 	status?: RequestStatusFilter | string;
 	employee_number?: string;
+	my_requests_only?: boolean;
+	page?: number;
+	page_size?: number;
 }
 
 export interface UpdateRequestStatusRequest {
 	request_id: string;
 	actor_id?: string;
+	reason?: string;
+}
+
+export interface CancelRequestInput {
+	request_id: string;
 	reason?: string;
 }
 

@@ -5,6 +5,7 @@ from typing import List, Optional
 from ..models.api_model import APIResponseModel
 from ..models.request_model import (
     BenefitClaimDecisionResponse,
+    CancelRequestInput,
     ExpenseClaimDecisionResponse,
     GetRequestListFilterRequest,
     LeaveRequestDecisionResponse,
@@ -450,3 +451,38 @@ class RequestService:
                 message = f"Failed to update request status: {str(e)}",
                 payload = False
             )
+
+    def cancel_request(self, cancel_req: CancelRequestInput, actor_id: Optional[str] = None) -> APIResponseModel[bool]:
+        logging.info(f"[INFO][request_service.py][cancel_request] Cancelling request_id: {cancel_req.request_id}")
+        try:
+            success = self._request_repository.update_request_status(
+                request_id = cancel_req.request_id,
+                new_status = "CANCELLED",
+                actor_id = actor_id,
+                reason = cancel_req.reason or "Employee cancelled request"
+            )
+            if not success:
+                return APIResponseModel[bool](
+                    is_success = False,
+                    error = f"Request with ID '{cancel_req.request_id}' not found.",
+                    status_code = 404,
+                    message = f"Request with ID '{cancel_req.request_id}' not found.",
+                    payload = False
+                )
+
+            return APIResponseModel[bool](
+                is_success = True,
+                status_code = 200,
+                message = "Request cancelled successfully",
+                payload = True
+            )
+        except Exception as e:
+            logging.error(f"[ERROR][request_service.py][cancel_request] Failed to cancel request. Error: {e}")
+            return APIResponseModel[bool](
+                is_success = False,
+                error = str(e),
+                status_code = 500,
+                message = f"Failed to cancel request: {str(e)}",
+                payload = False
+            )
+
