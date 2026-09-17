@@ -4,6 +4,8 @@
 
 Evan Santosa | 2026 | Portfolio Project
 
+<video src="documents/demo-video.mp4" controls width="100%"></video>
+
 ### I. Executive Summary
 
 Enterprise Human Resource departments routinely operate as high-friction operational bottlenecks. Employees lose thousands of productive hours attempting to parse complex policy PDFs for leave entitlements, expense allowances, and medical coverage, while HR teams spend up to 40% of their bandwidth manually verifying eligibility, calculating balances, and processing repetitive requests across fragmented enterprise databases. This systemic administrative friction—often termed "administrative sludge"—not only demoralizes workforce productivity but also introduces financial liability due to human errors and inconsistent policy enforcement.
